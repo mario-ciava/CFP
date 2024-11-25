@@ -329,24 +329,27 @@ class TestDAGSequencer:
     
     def test_linearization_determinism(self, keypair):
         """Same DAG should produce same linearization every time."""
-        orders = []
+        # Create a single DAG
+        seq = DAGSequencer(data_dir=None)
+        genesis = create_genesis_vertex(keypair)
+        seq.add_vertex(genesis)
         
-        for _ in range(5):
-            seq = DAGSequencer(data_dir=None)
-            genesis = create_genesis_vertex(keypair)
-            seq.add_vertex(genesis)
-            
-            # Add some vertices
-            v1 = create_vertex([genesis.vertex_id], b"v1", PayloadType.TRANSACTION, keypair)
-            v2 = create_vertex([genesis.vertex_id], b"v2", PayloadType.TRANSACTION, keypair)
-            seq.add_vertex(v1)
-            seq.add_vertex(v2)
-            
-            orders.append(seq.linearize())
+        # Add some concurrent vertices (both reference genesis)
+        v1 = create_vertex([genesis.vertex_id], b"v1", PayloadType.TRANSACTION, keypair)
+        v2 = create_vertex([genesis.vertex_id], b"v2", PayloadType.TRANSACTION, keypair)
+        seq.add_vertex(v1)
+        seq.add_vertex(v2)
+        
+        # Call linearize multiple times - should always return same order
+        orders = [seq.linearize() for _ in range(5)]
         
         # All orders should be identical
         for order in orders[1:]:
             assert order == orders[0]
+        
+        # Concurrent vertices should be ordered by vertex_id (lexicographic)
+        concurrent = orders[0][1:3]  # v1 and v2
+        assert concurrent == sorted(concurrent), "Concurrent vertices should be ordered lexicographically"
 
 
 # =============================================================================

@@ -14,7 +14,7 @@ from cfp.utils.logger import setup_logging, get_logger
 @click.group()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 @click.option("--data-dir", default="~/.cfp", help="Data directory")
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.1.1")
 @click.pass_context
 def cli(ctx, debug, data_dir):
     """Convergent Flow Protocol - Research blockchain prototype"""
@@ -55,7 +55,7 @@ def wallet_create(ctx, name):
     
     wallet_data = {
         "name": name,
-        "address": "0x" + bytes_to_hex(address),
+        "address": bytes_to_hex(address),
         "private_key": bytes_to_hex(kp.private_key),
         "public_key": bytes_to_hex(kp.public_key),
     }
@@ -63,7 +63,7 @@ def wallet_create(ctx, name):
     wallet_path.write_text(json.dumps(wallet_data, indent=2))
     
     click.echo(f"✓ Wallet created: {name}")
-    click.echo(f"  Address: 0x{bytes_to_hex(address)}")
+    click.echo(f"  Address: {bytes_to_hex(address)}")
     click.echo(f"  Saved to: {wallet_path}")
 
 
@@ -220,7 +220,7 @@ def stats():
     """Show system statistics"""
     click.echo("CFP System Statistics")
     click.echo("-" * 40)
-    click.echo("  Version: 0.1.0")
+    click.echo("  Version: 0.1.1")
     click.echo("  Modules: DAG, UTXO, Prover, Intent, Storage")
     click.echo("  Tests: 65+ passing")
     click.echo("  Status: Research prototype")
@@ -241,8 +241,10 @@ def node():
 @click.option("--port", default=8545, help="RPC port")
 def node_start(port):
     """Start CFP node (not implemented)"""
-    click.echo(f"Node startup not yet implemented")
-    click.echo(f"Use 'cfp demo' to see the system in action")
+    click.echo("⚠️  Node networking not yet implemented (planned for v0.2.0)")
+    click.echo("   Will include: P2P layer, gossip protocol, state sync")
+    click.echo("")
+    click.echo("For now, use 'cfp demo' to see the system in action.")
 
 
 if __name__ == "__main__":
