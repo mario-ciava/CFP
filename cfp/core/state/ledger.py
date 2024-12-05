@@ -166,8 +166,9 @@ class Ledger:
         
         # Special case: mint transaction (no inputs)
         if len(tx.inputs) == 0:
-            # Mint transactions are always valid structurally
-            # In production, you'd check authorization here
+            # SECURITY: Mint only allowed at genesis (block 0)
+            if self.block_height > 0:
+                return False, "Mint transactions only allowed at genesis"
             return True, ""
         
         # Check all inputs exist
@@ -191,11 +192,20 @@ class Ledger:
         
         # Check signatures (each input must be signed by owner)
         if check_signatures:
+            from cfp.crypto import recover_public_key, keccak256
+            signing_hash = tx.compute_signing_hash()
+            
             for i, (inp, utxo) in enumerate(zip(tx.inputs, input_utxos)):
-                # For signature verification, we need the public key
-                # In a real system, we'd recover it from signature or look it up
-                # For now, we skip this check in tests
-                pass
+                # Recover public key from signature and verify it matches owner
+                owner_verified = False
+                for recovery_id in (0, 1):
+                    recovered_pub = recover_public_key(signing_hash, inp.signature, recovery_id)
+                    if recovered_pub and keccak256(recovered_pub)[-20:] == utxo.owner:
+                        owner_verified = True
+                        break
+                
+                if not owner_verified:
+                    return False, f"Input {i}: Invalid signature or owner mismatch"
         
         return True, ""
     

@@ -211,7 +211,12 @@ class SnarkJSProver:
     - Node.js installed
     - snarkjs installed globally (npm install -g snarkjs)
     - Compiled circuit files (circuit.wasm, circuit.zkey)
+    
+    Security: Circuit names are validated to prevent path traversal.
     """
+    
+    # Allowlist for circuit names: only lowercase letters and underscores
+    CIRCUIT_NAME_PATTERN = __import__('re').compile(r'^[a-z][a-z0-9_]*$')
     
     def __init__(
         self,
@@ -223,9 +228,19 @@ class SnarkJSProver:
         
         Args:
             circuit_dir: Directory containing compiled circuit files
-            circuit_name: Name of the circuit
+            circuit_name: Name of the circuit (alphanumeric + underscores only)
+            
+        Raises:
+            ValueError: If circuit_name contains invalid characters
         """
-        self.circuit_dir = Path(circuit_dir)
+        # SECURITY: Validate circuit name to prevent path traversal
+        if not self.CIRCUIT_NAME_PATTERN.match(circuit_name):
+            raise ValueError(
+                f"Invalid circuit name '{circuit_name}'. "
+                "Must start with lowercase letter and contain only [a-z0-9_]"
+            )
+        
+        self.circuit_dir = Path(circuit_dir).resolve()  # Resolve to absolute path
         self.circuit_name = circuit_name
         
         # Expected file paths

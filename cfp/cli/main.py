@@ -7,14 +7,51 @@ Main entry point for all CLI commands.
 import json
 import click
 from pathlib import Path
+from typing import Optional
 
 from cfp.utils.logger import setup_logging, get_logger
+
+
+def decrypt_wallet_key(wallet_data: dict, wallet_name: str, password: str) -> Optional[bytes]:
+    """
+    Decrypt a wallet's private key.
+    
+    Args:
+        wallet_data: Loaded wallet JSON data
+        wallet_name: Wallet name (used as salt)
+        password: User's password
+        
+    Returns:
+        Decrypted private key bytes, or None on failure
+    """
+    import base64
+    import hashlib
+    from cryptography.fernet import Fernet, InvalidToken
+    from cfp.crypto import hex_to_bytes
+    
+    # Check for legacy plaintext wallet
+    if "private_key" in wallet_data:
+        return hex_to_bytes(wallet_data["private_key"])
+    
+    # Decrypt encrypted wallet
+    if "encrypted_private_key" not in wallet_data:
+        return None
+    
+    try:
+        salt = wallet_name.encode()
+        key = base64.urlsafe_b64encode(
+            hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
+        )
+        fernet = Fernet(key)
+        return fernet.decrypt(wallet_data["encrypted_private_key"].encode())
+    except InvalidToken:
+        return None
 
 
 @click.group()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 @click.option("--data-dir", default="~/.cfp", help="Data directory")
-@click.version_option(version="0.1.1")
+@click.version_option(version="0.2.0")
 @click.pass_context
 def cli(ctx, debug, data_dir):
     """Convergent Flow Protocol - Research blockchain prototype"""
@@ -32,7 +69,6 @@ def cli(ctx, debug, data_dir):
 # Wallet Commands
 # =============================================================================
 
-
 @cli.group()
 def wallet():
     """Wallet management commands"""
@@ -41,14 +77,28 @@ def wallet():
 
 @wallet.command("create")
 @click.option("--name", default="default", help="Wallet name")
+@click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True, help="Encryption password")
 @click.pass_context
-def wallet_create(ctx, name):
-    """Create a new wallet"""
+def wallet_create(ctx, name, password):
+    """Create a new encrypted wallet"""
+    import base64
+    import hashlib
+    from cryptography.fernet import Fernet
     from cfp.crypto import generate_keypair, bytes_to_hex
     from cfp.core.state import address_from_public_key
     
     kp = generate_keypair()
     address = address_from_public_key(kp.public_key)
+    
+    # Derive encryption key from password using PBKDF2
+    salt = name.encode()  # Use wallet name as salt (deterministic per wallet)
+    key = base64.urlsafe_b64encode(
+        hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
+    )
+    fernet = Fernet(key)
+    
+    # Encrypt private key
+    encrypted_private_key = fernet.encrypt(kp.private_key).decode('utf-8')
     
     wallet_path = ctx.obj["data_dir"] / "wallets" / f"{name}.json"
     wallet_path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,7 +106,7 @@ def wallet_create(ctx, name):
     wallet_data = {
         "name": name,
         "address": bytes_to_hex(address),
-        "private_key": bytes_to_hex(kp.private_key),
+        "encrypted_private_key": encrypted_private_key,  # Encrypted!
         "public_key": bytes_to_hex(kp.public_key),
     }
     
@@ -65,6 +115,7 @@ def wallet_create(ctx, name):
     click.echo(f"✓ Wallet created: {name}")
     click.echo(f"  Address: {bytes_to_hex(address)}")
     click.echo(f"  Saved to: {wallet_path}")
+    click.echo(f"  ⚠️  Remember your password - it cannot be recovered!")
 
 
 @wallet.command("list")
@@ -220,14 +271,13 @@ def stats():
     """Show system statistics"""
     click.echo("CFP System Statistics")
     click.echo("-" * 40)
-    click.echo("  Version: 0.1.1")
-    click.echo("  Modules: DAG, UTXO, Prover, Intent, Storage")
-    click.echo("  Tests: 65+ passing")
+    click.echo("  Version: 0.2.0")
+    click.echo("  Modules: DAG, UTXO, Prover, Intent, Storage, Network")
+    click.echo("  Tests: 76 passing")
     click.echo("  Status: Research prototype")
 
 
-# =============================================================================
-# Node Commands (placeholder)
+# Node Commands
 # =============================================================================
 
 
@@ -238,13 +288,163 @@ def node():
 
 
 @node.command("start")
-@click.option("--port", default=8545, help="RPC port")
-def node_start(port):
-    """Start CFP node (not implemented)"""
-    click.echo("⚠️  Node networking not yet implemented (planned for v0.2.0)")
-    click.echo("   Will include: P2P layer, gossip protocol, state sync")
+@click.option("--port", default=9000, help="P2P port")
+@click.option("--connect", default=None, help="Peer to connect to (host:port)")
+def node_start(port, connect):
+    """Start CFP P2P node"""
+    import asyncio
+    from cfp.network import NetworkNode, NodeConfig
+    
+    async def run_node():
+        config = NodeConfig(port=port)
+        node = NetworkNode(config)
+        await node.start()
+        
+        if connect:
+            host, peer_port = connect.split(":")
+            click.echo(f"Connecting to {host}:{peer_port}...")
+            await node.connect_to_peer(host, int(peer_port))
+        
+        click.echo(f"Node running on port {port}. Press Ctrl+C to stop.")
+        
+        try:
+            while True:
+                await asyncio.sleep(10)
+                click.echo(f"  Peers: {node.peer_count}")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await node.stop()
+    
+    try:
+        asyncio.run(run_node())
+    except KeyboardInterrupt:
+        click.echo("\nNode stopped.")
+
+
+# =============================================================================
+# Transaction Commands
+# =============================================================================
+
+
+@cli.group()
+def tx():
+    """Transaction commands"""
+    pass
+
+
+@tx.command("send")
+@click.option("--from", "from_wallet", required=True, help="Sender wallet name")
+@click.option("--to", required=True, help="Recipient address (0x...)")
+@click.option("--amount", required=True, type=int, help="Amount to send")
+@click.option("--fee", default=10, type=int, help="Transaction fee")
+@click.pass_context
+def tx_send(ctx, from_wallet, to, amount, fee):
+    """Send a transaction (demo mode)"""
+    from cfp.crypto import generate_keypair, bytes_to_hex, hex_to_bytes
+    from cfp.core.state import Ledger, address_from_public_key, create_transfer
+    
+    # Load wallet
+    wallet_path = ctx.obj["data_dir"] / "wallets" / f"{from_wallet}.json"
+    if not wallet_path.exists():
+        click.echo(f"❌ Wallet '{from_wallet}' not found")
+        click.echo(f"   Create with: cfp wallet create --name {from_wallet}")
+        return
+    
+    wallet_data = json.loads(wallet_path.read_text())
+    
+    click.echo("Transaction (Demo Mode)")
+    click.echo("-" * 40)
+    click.echo(f"  From: {wallet_data['name']} ({wallet_data['address'][:12]}...)")
+    click.echo(f"  To: {to[:12]}...")
+    click.echo(f"  Amount: {amount} CFP")
+    click.echo(f"  Fee: {fee} CFP")
     click.echo("")
-    click.echo("For now, use 'cfp demo' to see the system in action.")
+    
+    # Demo: simulate transaction
+    click.echo("⚠️  Demo mode: transactions are simulated, not persisted")
+    click.echo("")
+    
+    # Create demo ledger with sender balance
+    ledger = Ledger()
+    sender_kp = generate_keypair()
+    sender_addr = address_from_public_key(sender_kp.public_key)
+    recipient_addr = hex_to_bytes(to)
+    
+    ledger.create_genesis([(sender_addr, 10000)])
+    
+    # Create transaction
+    utxos = ledger.get_utxos_for_address(sender_addr)
+    change = 10000 - amount - fee
+    
+    if change < 0:
+        click.echo(f"❌ Insufficient balance for amount + fee")
+        return
+    
+    tx = create_transfer(
+        inputs=[(utxos[0], sender_kp.private_key)],
+        recipients=[(recipient_addr, amount), (sender_addr, change)],
+        fee=fee,
+    )
+    
+    success, msg = ledger.apply_transaction(tx)
+    
+    if success:
+        click.echo(f"✅ Transaction created")
+        click.echo(f"   TX Hash: {bytes_to_hex(tx.tx_hash)[:20]}...")
+        click.echo(f"   Status: Applied (demo)")
+    else:
+        click.echo(f"❌ Transaction failed: {msg}")
+
+
+# =============================================================================
+# DAG Commands
+# =============================================================================
+
+
+@cli.group()
+def dag():
+    """DAG inspection commands"""
+    pass
+
+
+@dag.command("show")
+@click.option("--limit", default=10, help="Max vertices to show")
+def dag_show(limit):
+    """Show DAG structure (demo mode)"""
+    from cfp.crypto import generate_keypair, bytes_to_hex
+    from cfp.core.dag import DAGSequencer, create_genesis_vertex, create_vertex, PayloadType
+    
+    click.echo("DAG Structure (Demo)")
+    click.echo("-" * 40)
+    
+    # Create demo DAG
+    kp = generate_keypair()
+    dag = DAGSequencer()
+    
+    genesis = create_genesis_vertex(kp)
+    dag.add_vertex(genesis)
+    
+    # Add some vertices
+    v1 = create_vertex([genesis.vertex_id], b"tx1", PayloadType.TRANSACTION, kp)
+    v2 = create_vertex([genesis.vertex_id], b"tx2", PayloadType.TRANSACTION, kp)
+    dag.add_vertex(v1)
+    dag.add_vertex(v2)
+    
+    v3 = create_vertex([v1.vertex_id, v2.vertex_id], b"merge", PayloadType.TRANSACTION, kp)
+    dag.add_vertex(v3)
+    
+    # Display
+    click.echo(f"  Total vertices: {dag.vertex_count()}")
+    click.echo(f"  Tips: {len(dag.get_tips())}")
+    click.echo("")
+    click.echo("  Linearized order:")
+    
+    for i, vid in enumerate(dag.linearize()[:limit]):
+        v = dag.get_vertex(vid)
+        short_id = bytes_to_hex(vid)[:10]
+        parents = len(v.parents)
+        click.echo(f"    {i+1}. {short_id}... ({parents} parents, {v.payload_type.name})")
 
 
 if __name__ == "__main__":

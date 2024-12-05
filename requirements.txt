@@ -3,6 +3,7 @@ networkx>=3.2
 py-ecc>=6.0.0
 pycryptodome>=3.19.0
 pydantic>=2.5.0
+cryptography>=41.0.0
 
 # CLI
 click>=8.1.0
