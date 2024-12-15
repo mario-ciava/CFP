@@ -2,14 +2,27 @@
 Cryptographic primitives for CFP.
 
 This module provides:
-- Hashing functions (SHA-256, Keccak-256)
+- Hashing functions (SHA-256, Keccak-256, Poseidon)
 - Key generation and management
 - Digital signatures (ECDSA on secp256k1)
+- ZK-friendly primitives (Poseidon hash for circuits)
 
 Design Notes:
 -------------
 We use secp256k1 (same as Bitcoin/Ethereum) for familiarity and tooling compatibility.
-For ZK-friendly operations, we may later add BN128/BLS12-381 curves.
+For ZK-friendly operations, we use Poseidon hash which is optimized for arithmetic circuits.
+
+Poseidon is used for:
+- Intent IDs (deterministic, ZK-provable)
+- Solver commitments (sealed bids)
+- UTXO commitments (when ZK-verified)
+- Transcript leaves (auction binding)
+- Nullifiers (when ZK-verified)
+
+SHA-256/Keccak are retained for:
+- Backward compatibility
+- Non-ZK operations (vertex IDs, etc.)
+- Address derivation (Ethereum compatibility)
 """
 
 import hashlib
@@ -298,3 +311,37 @@ def is_valid_address(address: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+# =============================================================================
+# Poseidon Hash (ZK-friendly)
+# =============================================================================
+
+# Import Poseidon functions for ZK-friendly hashing
+# These are used for intent IDs, commitments, nullifiers etc.
+from cfp.crypto.poseidon import (
+    # Core hash functions
+    poseidon_hash,
+    poseidon1,
+    poseidon2,
+    poseidon_bytes,
+    poseidon_bytes_to_bytes,
+    # Field element conversion
+    int_to_bytes32,
+    bytes32_to_int,
+    FIELD_PRIME,
+    # CFP-specific hash functions
+    hash_intent_id,
+    hash_solver_commit,
+    hash_nullifier,
+    hash_utxo_commitment,
+    hash_transcript_leaf,
+    hash_tie_break,
+    # Domain separators
+    DOMAIN_INTENT_ID,
+    DOMAIN_SOLVER_COMMIT,
+    DOMAIN_NULLIFIER,
+    DOMAIN_UTXO_COMMITMENT,
+    DOMAIN_TRANSCRIPT_LEAF,
+    DOMAIN_TIE_BREAK,
+)

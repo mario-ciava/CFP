@@ -1,0 +1,43 @@
+{
+    "description": "Poseidon hash parameters for CFP - compatible with circomlib",
+    "version": "1.0.0",
+    "field": {
+        "name": "BN254",
+        "prime": "21888242871839275222246405745257275088548364400416034343698204186575808495617",
+        "description": "BN254 scalar field (same as used in Groth16/snarkjs)"
+    },
+    "poseidon_params": {
+        "t": 3,
+        "description": "Width of Poseidon permutation (t=3 means 2 inputs + 1 capacity)",
+        "rounds_f": 8,
+        "rounds_p": 57,
+        "alpha": 5,
+        "notes": "These parameters match circomlib's Poseidon implementation"
+    },
+    "domain_separators": {
+        "intent_id": "0x01",
+        "solver_commit": "0x02",
+        "nullifier": "0x03",
+        "utxo_commitment": "0x04",
+        "transcript_leaf": "0x05",
+        "tie_break": "0x06"
+    },
+    "test_vectors": [
+        {
+            "description": "Poseidon(1, 2) with t=3",
+            "inputs": [
+                "1",
+                "2"
+            ],
+            "expected": "7853200120776062878684798364095072458815029376092732009249414926327459813530"
+        },
+        {
+            "description": "Poseidon(0, 0) with t=3",
+            "inputs": [
+                "0",
+                "0"
+            ],
+            "expected": "14744269619966411208579211824598458697587494354926760081771325075741142829156"
+        }
+    ]
+}
