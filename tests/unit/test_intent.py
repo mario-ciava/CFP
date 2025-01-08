@@ -86,13 +86,15 @@ class TestIntent:
         """Same intent should produce same ID."""
         addr = address_from_public_key(user_keypair.public_key)
         
-        # Create two intents with same timestamp
+        # Create two intents with same values including nonce
         i1 = Intent(
             user=addr,
             intent_type=IntentType.TRANSFER,
             conditions=b'{"a": 1}',
             max_fee=50,
             deadline_block=100,
+            nonce=12345,  # Explicit nonce for determinism
+            chain_id=1,
             created_at=12345,
         )
         i2 = Intent(
@@ -101,6 +103,8 @@ class TestIntent:
             conditions=b'{"a": 1}',
             max_fee=50,
             deadline_block=100,
+            nonce=12345,  # Same nonce
+            chain_id=1,
             created_at=12345,
         )
         
