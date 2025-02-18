@@ -29,6 +29,14 @@ from cfp.core.auction.commit_reveal import (
     DEFAULT_REVEAL_WINDOW,
 )
 
+from cfp.core.auction.transcript import (
+    PoseidonMerkleTree,
+    TranscriptBuilder,
+    compute_merkle_root,
+    verify_merkle_inclusion,
+    EMPTY_LEAF,
+)
+
 __all__ = [
     # Scoring
     "compute_utility",
@@ -47,4 +55,11 @@ __all__ = [
     "create_solver_commit",
     "DEFAULT_COMMIT_WINDOW",
     "DEFAULT_REVEAL_WINDOW",
+    # Transcript
+    "PoseidonMerkleTree",
+    "TranscriptBuilder",
+    "compute_merkle_root",
+    "verify_merkle_inclusion",
+    "EMPTY_LEAF",
 ]
+
