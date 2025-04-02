@@ -81,7 +81,7 @@ class UTXO:
     
     def compute_commitment(self) -> bytes:
         """
-        Compute the commitment for this UTXO.
+        Compute the commitment for this UTXO (legacy SHA-256).
         
         commitment = SHA256(value || owner || salt)
         
@@ -91,9 +91,34 @@ class UTXO:
         value_bytes = self.value.to_bytes(8, byteorder="big")
         return sha256(value_bytes + self.owner + self.salt)
     
+    def compute_commitment_poseidon(self) -> int:
+        """
+        Compute ZK-friendly commitment using Poseidon hash.
+        
+        commitment = Poseidon(domain, value, pk_hash, salt)
+        
+        Used for ZK circuits where Poseidon is more efficient.
+        
+        Returns:
+            Commitment as field element (integer)
+        """
+        from cfp.crypto import hash_utxo_commitment, poseidon_bytes
+        
+        # Hash owner address to field element
+        pk_hash = poseidon_bytes(self.owner)
+        
+        # Convert salt to field element
+        salt_int = int.from_bytes(self.salt, 'big') % (2**254)  # Fit in field
+        
+        return hash_utxo_commitment(
+            amount=self.value,
+            pubkey_hash=pk_hash,
+            salt=salt_int
+        )
+    
     def compute_nullifier(self, owner_private_key: bytes) -> bytes:
         """
-        Compute the nullifier for spending this UTXO.
+        Compute the nullifier for spending this UTXO (legacy SHA-256).
         
         nullifier = SHA256(commitment || private_key)
         
@@ -111,6 +136,24 @@ class UTXO:
         
         commitment = self.compute_commitment()
         return sha256(commitment + owner_private_key)
+    
+    def compute_nullifier_poseidon(self, nullifier_key: int, merkle_index: int) -> int:
+        """
+        Compute ZK-friendly nullifier using Poseidon hash.
+        
+        nullifier = Poseidon(domain, nk, merkle_index)
+        
+        This is the format expected by the UTXO transition circuit.
+        
+        Args:
+            nullifier_key: Derived from private key (field element)
+            merkle_index: Position in the state Merkle tree
+            
+        Returns:
+            Nullifier as field element (integer)
+        """
+        from cfp.crypto import hash_nullifier
+        return hash_nullifier(nullifier_key, merkle_index)
     
     @property
     def utxo_id(self) -> bytes:
