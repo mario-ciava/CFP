@@ -32,6 +32,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from cfp.core.state.utxo import UTXO, address_from_public_key
 from cfp.core.state.transaction import Transaction, TxOutput, create_mint
 from cfp.core.state.merkle import MerkleTree
+from cfp.core.storage.storage_manager import StorageManager
 from cfp.utils.logger import get_logger
 from cfp.crypto import sha256, bytes_to_hex
 
@@ -70,12 +71,12 @@ class Ledger:
         block_height: Current block height
     """
     
-    def __init__(self, data_dir: Optional[Path] = None):
+    def __init__(self, storage_manager: Optional[StorageManager] = None):
         """
         Initialize the ledger.
         
         Args:
-            data_dir: Directory for persistence. None = in-memory only.
+            storage_manager: Persistence manager. None = in-memory only.
         """
         # UTXO storage
         self.utxo_set: Dict[bytes, UTXO] = {}  # utxo_id -> UTXO
@@ -89,11 +90,10 @@ class Ledger:
         self.snapshots: List[LedgerSnapshot] = []
         
         # Persistence
-        self.data_dir = data_dir
-        self._db: Optional[sqlite3.Connection] = None
+        self.storage_manager = storage_manager
         
-        if data_dir:
-            self._init_persistence()
+        if storage_manager:
+            self._load_from_storage()
     
     # =========================================================================
     # State Access
@@ -261,7 +261,7 @@ class Ledger:
             self.utxo_tree.insert(commitment)
         
         # Persist if enabled
-        if self._db:
+        if self.storage_manager:
             self._persist_transaction(tx)
         
         logger.debug(f"Applied tx {bytes_to_hex(tx.tx_hash)[:10]}... ({len(tx.inputs)} in, {len(tx.outputs)} out)")
@@ -294,6 +294,14 @@ class Ledger:
             utxo_count=len(self.utxo_set),
         )
         self.snapshots.append(snapshot)
+        
+        if self.storage_manager:
+            self.storage_manager.persist_snapshot(
+                snapshot.block_height,
+                snapshot.state_root,
+                snapshot.nullifier_count,
+                snapshot.utxo_count
+            )
         
         logger.info(f"Applied block {self.block_height}: {len(transactions)} txs, root={bytes_to_hex(self.state_root)[:10]}...")
         return True, f"Block {self.block_height} applied"
@@ -331,98 +339,54 @@ class Ledger:
     # Persistence
     # =========================================================================
     
-    def _init_persistence(self) -> None:
-        """Initialize SQLite database."""
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        db_path = self.data_dir / "ledger.db"
-        self._db = sqlite3.connect(str(db_path))
-        
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS utxos (
-                utxo_id BLOB PRIMARY KEY,
-                data BLOB NOT NULL
-            )
-        """)
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS nullifiers (
-                nullifier BLOB PRIMARY KEY
-            )
-        """)
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS transactions (
-                tx_hash BLOB PRIMARY KEY,
-                data BLOB NOT NULL,
-                block_height INTEGER
-            )
-        """)
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS snapshots (
-                block_height INTEGER PRIMARY KEY,
-                state_root BLOB,
-                nullifier_count INTEGER,
-                utxo_count INTEGER
-            )
-        """)
-        self._db.commit()
-        
-        self._load_from_db()
-    
-    def _persist_transaction(self, tx: Transaction) -> None:
-        """Persist a transaction."""
-        if not self._db:
+    def _load_from_storage(self) -> None:
+        """Load state from storage manager."""
+        if not self.storage_manager:
             return
-        
-        self._db.execute(
-            "INSERT OR REPLACE INTO transactions (tx_hash, data, block_height) VALUES (?, ?, ?)",
-            (tx.tx_hash, tx.to_bytes(), self.block_height)
-        )
-        
-        # Update UTXOs
-        for inp in tx.inputs:
-            self._db.execute("DELETE FROM utxos WHERE utxo_id = ?", (inp.utxo_id,))
-            self._db.execute(
-                "INSERT OR REPLACE INTO nullifiers (nullifier) VALUES (?)",
-                (inp.nullifier,)
-            )
-        
-        for i, out in enumerate(tx.outputs):
-            utxo = out.to_utxo(tx.tx_hash, i)
-            self._db.execute(
-                "INSERT OR REPLACE INTO utxos (utxo_id, data) VALUES (?, ?)",
-                (utxo.utxo_id, utxo.to_bytes())
-            )
-        
-        self._db.commit()
-    
-    def _load_from_db(self) -> None:
-        """Load state from database."""
-        if not self._db:
-            return
+            
+        utxos, nullifiers, snapshots = self.storage_manager.load_ledger_state()
         
         # Load UTXOs
-        for (utxo_id, data) in self._db.execute("SELECT utxo_id, data FROM utxos"):
+        for (utxo_id, data) in utxos:
             utxo = UTXO.from_bytes(data)
             self.utxo_set[utxo_id] = utxo
             self.utxo_tree.insert(utxo.compute_commitment())
-        
-        # Load nullifiers
-        for (nullifier,) in self._db.execute("SELECT nullifier FROM nullifiers"):
+            
+        # Load Nullifiers
+        for nullifier in nullifiers:
             self.nullifier_set.add(nullifier)
-        
-        # Load snapshots
-        for row in self._db.execute("SELECT block_height, state_root, nullifier_count, utxo_count FROM snapshots"):
+            
+        # Load Snapshots
+        for row in snapshots:
             self.snapshots.append(LedgerSnapshot(*row))
-        
+            
         if self.snapshots:
             self.block_height = self.snapshots[-1].block_height
+            
+        logger.info(f"Loaded ledger: {len(self.utxo_set)} UTXOs, {len(self.nullifier_set)} nullifiers, height={self.block_height}")
+
+    def _persist_transaction(self, tx: Transaction) -> None:
+        """Persist a transaction via StorageManager."""
+        spent_utxos = [inp.utxo_id for inp in tx.inputs]
+        new_nullifiers = [inp.nullifier for inp in tx.inputs]
         
-        logger.info(f"Loaded ledger: {len(self.utxo_set)} UTXOs, {len(self.nullifier_set)} nullifiers")
+        new_utxos = []
+        for i, out in enumerate(tx.outputs):
+            utxo = out.to_utxo(tx.tx_hash, i)
+            new_utxos.append((utxo.utxo_id, utxo.to_bytes()))
+            
+        self.storage_manager.persist_ledger_update(
+            tx.tx_hash,
+            tx.to_bytes(),
+            self.block_height,
+            spent_utxos,
+            new_nullifiers,
+            new_utxos
+        )
     
     def close(self) -> None:
-        """Close database connection."""
-        if self._db:
-            self._db.close()
-            self._db = None
+        """Close storage."""
+        pass
     
     # =========================================================================
     # Utility

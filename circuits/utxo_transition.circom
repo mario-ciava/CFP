@@ -32,11 +32,12 @@ include "../node_modules/circomlib/circuits/comparators.circom";
 include "../node_modules/circomlib/circuits/bitify.circom";
 
 // Domain separators
-var DOMAIN_NULLIFIER = 3;
-var DOMAIN_UTXO_COMMITMENT = 4;
-
 // Template for N inputs and M outputs
 template UTXOTransition(N, M, TREE_DEPTH) {
+    // Domain separators
+    var DOMAIN_NULLIFIER = 3;
+    var DOMAIN_UTXO_COMMITMENT = 4;
+    
     // =========================================================================
     // Public Inputs
     // =========================================================================
@@ -192,17 +193,18 @@ template MerkleProofVerifyUTXO(LEVELS) {
     signal levelHashes[LEVELS + 1];
     levelHashes[0] <== leaf;
     
+    // Signals for path reconstruction
+    signal left[LEVELS];
+    signal right[LEVELS];
+
     for (var i = 0; i < LEVELS; i++) {
         hashers[i] = Poseidon(2);
         
-        signal left;
-        signal right;
+        left[i] <== indexBits.out[i] * (proof[i] - levelHashes[i]) + levelHashes[i];
+        right[i] <== indexBits.out[i] * (levelHashes[i] - proof[i]) + proof[i];
         
-        left <== indexBits.out[i] * (proof[i] - levelHashes[i]) + levelHashes[i];
-        right <== indexBits.out[i] * (levelHashes[i] - proof[i]) + proof[i];
-        
-        hashers[i].inputs[0] <== left;
-        hashers[i].inputs[1] <== right;
+        hashers[i].inputs[0] <== left[i];
+        hashers[i].inputs[1] <== right[i];
         
         levelHashes[i + 1] <== hashers[i].out;
     }

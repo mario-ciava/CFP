@@ -38,7 +38,7 @@ The orphan pool queues such vertices and automatically processes them when paren
 """
 
 import time
-import sqlite3
+from typing import Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +47,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import networkx as nx
 
 from cfp.core.dag.vertex import Vertex, PayloadType, GENESIS_VERTEX_ID
+from cfp.core.storage.storage_manager import StorageManager
 from cfp.utils.logger import get_logger
 
 logger = get_logger("dag")
@@ -132,12 +133,12 @@ class DAGSequencer:
         genesis_id: ID of the genesis vertex (None until initialized)
     """
     
-    def __init__(self, data_dir: Optional[Path] = None):
+    def __init__(self, storage_manager: Optional[StorageManager] = None):
         """
         Initialize the DAG sequencer.
         
         Args:
-            data_dir: Directory for persistence (SQLite). None = in-memory only.
+            storage_manager: Shared Persistence manager. None = in-memory only.
         """
         self.graph = nx.DiGraph()
         self.vertices: Dict[bytes, Vertex] = {}
@@ -146,11 +147,10 @@ class DAGSequencer:
         self.genesis_id: Optional[bytes] = None
         
         # Persistence
-        self.data_dir = data_dir
-        self._db: Optional[sqlite3.Connection] = None
+        self.storage_manager = storage_manager
         
-        if data_dir:
-            self._init_persistence()
+        if storage_manager:
+            self._load_from_storage()
     
     # =========================================================================
     # Vertex Operations
@@ -236,8 +236,8 @@ class DAGSequencer:
         self.tips.add(vertex.vertex_id)
         
         # Persist
-        if self._db:
-            self._persist_vertex(vertex)
+        if self.storage_manager:
+            self.storage_manager.persist_vertex(vertex, vertex.to_bytes())
     
     def _process_orphans(self, arrived_id: bytes) -> None:
         """Process orphans that were waiting for this vertex."""
@@ -375,62 +375,16 @@ class DAGSequencer:
     # Persistence
     # =========================================================================
     
-    def _init_persistence(self) -> None:
-        """Initialize SQLite database for persistence."""
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        db_path = self.data_dir / "dag.db"
-        self._db = sqlite3.connect(str(db_path))
-        
-        # Create tables
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS vertices (
-                vertex_id BLOB PRIMARY KEY,
-                data BLOB NOT NULL,
-                timestamp INTEGER NOT NULL
-            )
-        """)
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS edges (
-                parent_id BLOB NOT NULL,
-                child_id BLOB NOT NULL,
-                PRIMARY KEY (parent_id, child_id)
-            )
-        """)
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS metadata (
-                key TEXT PRIMARY KEY,
-                value BLOB
-            )
-        """)
-        self._db.commit()
-        
-        # Load existing data
-        self._load_from_db()
-    
-    def _persist_vertex(self, vertex: Vertex) -> None:
-        """Persist a vertex to SQLite."""
-        if not self._db:
-            return
-        
-        self._db.execute(
-            "INSERT OR REPLACE INTO vertices (vertex_id, data, timestamp) VALUES (?, ?, ?)",
-            (vertex.vertex_id, vertex.to_bytes(), vertex.timestamp)
-        )
-        for parent_id in vertex.parents:
-            self._db.execute(
-                "INSERT OR REPLACE INTO edges (parent_id, child_id) VALUES (?, ?)",
-                (parent_id, vertex.vertex_id)
-            )
-        self._db.commit()
-    
-    def _load_from_db(self) -> None:
-        """Load DAG from SQLite."""
-        if not self._db:
+    def _load_from_storage(self) -> None:
+        """Load DAG from StorageManager."""
+        if not self.storage_manager:
             return
         
         # Load vertices
-        cursor = self._db.execute("SELECT data FROM vertices ORDER BY timestamp")
-        for (data,) in cursor:
+        # Optimized loading: Get all vertices ordered by timestamp
+        vertex_data_list = self.storage_manager.load_dag_vertices()
+        
+        for data in vertex_data_list:
             vertex = Vertex.from_bytes(data)
             self.vertices[vertex.vertex_id] = vertex
             self.graph.add_node(vertex.vertex_id)
@@ -438,8 +392,8 @@ class DAGSequencer:
                 self.genesis_id = vertex.vertex_id
         
         # Load edges
-        cursor = self._db.execute("SELECT parent_id, child_id FROM edges")
-        for parent_id, child_id in cursor:
+        edges = self.storage_manager.load_dag_edges()
+        for parent_id, child_id in edges:
             self.graph.add_edge(parent_id, child_id)
         
         # Rebuild tips
@@ -448,13 +402,12 @@ class DAGSequencer:
             if self.graph.out_degree(vertex_id) == 0:
                 self.tips.add(vertex_id)
         
-        logger.info(f"Loaded {len(self.vertices)} vertices from database")
+        logger.info(f"Loaded {len(self.vertices)} vertices from storage")
     
     def close(self) -> None:
-        """Close the database connection."""
-        if self._db:
-            self._db.close()
-            self._db = None
+        """Cleanup resources."""
+        # Storage manager lifecycle is handled by Node
+        pass
     
     # =========================================================================
     # Utility

@@ -47,13 +47,13 @@ def second_keypair():
 @pytest.fixture
 def ledger():
     """Create an in-memory ledger."""
-    return Ledger(data_dir=None)
+    return Ledger(storage_manager=None)
 
 
 @pytest.fixture
 def funded_ledger(keypair):
     """Create a ledger with initial funding."""
-    ledger = Ledger(data_dir=None)
+    ledger = Ledger(storage_manager=None)
     address = address_from_public_key(keypair.public_key)
     ledger.create_genesis([(address, 1000)])
     return ledger, keypair
@@ -266,7 +266,7 @@ class TestLedger:
     
     def test_genesis_creation(self, keypair):
         """Genesis should create initial UTXOs."""
-        ledger = Ledger(data_dir=None)
+        ledger = Ledger(storage_manager=None)
         address = address_from_public_key(keypair.public_key)
         
         ledger.create_genesis([(address, 1000)])
@@ -371,7 +371,7 @@ class TestLedger:
     
     def test_multiple_inputs(self, keypair, second_keypair):
         """Transaction can consume multiple inputs."""
-        ledger = Ledger(data_dir=None)
+        ledger = Ledger(storage_manager=None)
         sender_addr = address_from_public_key(keypair.public_key)
         recipient_addr = address_from_public_key(second_keypair.public_key)
         

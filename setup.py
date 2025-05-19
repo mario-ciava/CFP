@@ -5,8 +5,6 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="cfp",
-    version="0.2.0",
-    author="CFP Research Team",
     description="Convergent Flow Protocol - A research blockchain prototype",
     long_description=long_description,
     long_description_content_type="text/markdown",

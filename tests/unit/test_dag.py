@@ -43,13 +43,13 @@ def second_keypair() -> KeyPair:
 @pytest.fixture
 def sequencer():
     """Create an in-memory DAG sequencer."""
-    return DAGSequencer(data_dir=None)
+    return DAGSequencer(storage_manager=None)
 
 
 @pytest.fixture
 def sequencer_with_genesis(keypair):
     """Create a sequencer with genesis already added."""
-    seq = DAGSequencer(data_dir=None)
+    seq = DAGSequencer(storage_manager=None)
     genesis = create_genesis_vertex(keypair)
     seq.add_vertex(genesis)
     return seq, genesis
@@ -330,7 +330,7 @@ class TestDAGSequencer:
     def test_linearization_determinism(self, keypair):
         """Same DAG should produce same linearization every time."""
         # Create a single DAG
-        seq = DAGSequencer(data_dir=None)
+        seq = DAGSequencer(storage_manager=None)
         genesis = create_genesis_vertex(keypair)
         seq.add_vertex(genesis)
         

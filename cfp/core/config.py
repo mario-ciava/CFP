@@ -64,8 +64,4 @@ def load_config(config_path: Optional[str] = None) -> ChainConfig:
     Returns:
         ChainConfig instance
     """
-    if config_path:
-        # TODO: Implement config file loading (JSON/TOML)
-        pass
-
     return ChainConfig()

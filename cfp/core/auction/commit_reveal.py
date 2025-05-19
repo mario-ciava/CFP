@@ -119,6 +119,11 @@ class SolverReveal:
     solution_hash: int   # Hash of execution plan
     salt: int            # Random blinding factor
     
+    @property
+    def fee_offered(self) -> int:
+        """Alias for score to match SolutionLike protocol."""
+        return self.score
+    
     def compute_commitment(self) -> int:
         """Compute commitment that should match."""
         intent_id_int = int.from_bytes(self.intent_id[:32].ljust(32, b'\x00'), 'big') % FIELD_PRIME

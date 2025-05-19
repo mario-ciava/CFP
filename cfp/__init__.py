@@ -7,5 +7,3 @@ A research blockchain prototype integrating:
 - Intent auctions for MEV handling
 - UTXO state model
 """
-
-__version__ = "0.2.0"

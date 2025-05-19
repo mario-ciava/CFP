@@ -26,9 +26,10 @@ include "../node_modules/circomlib/circuits/poseidon.circom";
 include "../node_modules/circomlib/circuits/comparators.circom";
 
 // Domain separators (must match Python implementation)
-var DOMAIN_INTENT_ID = 1;
-
 template IntentSatisfy() {
+    // Domain separators (must match Python implementation)
+    var DOMAIN_INTENT_ID = 1;
+    
     // =========================================================================
     // Public Inputs
     // =========================================================================

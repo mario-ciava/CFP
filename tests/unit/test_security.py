@@ -34,7 +34,7 @@ def second_keypair():
 @pytest.fixture
 def funded_ledger(keypair):
     """Ledger with initial funds after genesis."""
-    ledger = Ledger(data_dir=None)
+    ledger = Ledger(storage_manager=None)
     address = address_from_public_key(keypair.public_key)
     ledger.create_genesis([(address, 1000)])
     return ledger, keypair
@@ -45,7 +45,7 @@ class TestMintAuthorization:
     
     def test_mint_allowed_at_genesis(self, keypair):
         """Mint should succeed during genesis (block 0)."""
-        ledger = Ledger(data_dir=None)
+        ledger = Ledger(storage_manager=None)
         address = address_from_public_key(keypair.public_key)
         
         # Genesis mint should work

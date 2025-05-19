@@ -111,6 +111,11 @@ template AuctionSelect(K, TREE_DEPTH) {
     current_winner_score[0] <== all_scores[0];
     current_winner_tiebreak[0] <== tiebreaks[0];
     
+    // Signals for tournament logic
+    signal score_wins[K];
+    signal tie_wins[K];
+    signal candidate_wins[K];
+
     // Pairwise comparisons
     for (var i = 1; i < K; i++) {
         // Compare score[i] > current_winner_score[i-1]
@@ -124,23 +129,21 @@ template AuctionSelect(K, TREE_DEPTH) {
         score_eq[i-1].in[1] <== current_winner_score[i-1];
         
         // Compare tiebreak[i] < current_winner_tiebreak[i-1] (smaller wins)
-        tiebreak_lt[i-1] = LessThan(254);
+        // Note: Using 252 bits to satisfy circomlib limits (sufficient entropy)
+        tiebreak_lt[i-1] = LessThan(252);
         tiebreak_lt[i-1].in[0] <== tiebreaks[i];
         tiebreak_lt[i-1].in[1] <== current_winner_tiebreak[i-1];
         
         // Candidate wins if: score > best OR (score == best AND tiebreak < best_tiebreak)
-        signal score_wins;
-        signal tie_wins;
-        score_wins <== score_gt[i-1].out;
-        tie_wins <== score_eq[i-1].out * tiebreak_lt[i-1].out;
+        score_wins[i] <== score_gt[i-1].out;
+        tie_wins[i] <== score_eq[i-1].out * tiebreak_lt[i-1].out;
         
-        signal candidate_wins;
-        candidate_wins <== score_wins + tie_wins - score_wins * tie_wins; // OR gate
+        candidate_wins[i] <== score_wins[i] + tie_wins[i] - score_wins[i] * tie_wins[i]; // OR gate
         
         // Update current winner using mux
-        current_winner_id[i] <== candidate_wins * (all_solver_ids[i] - current_winner_id[i-1]) + current_winner_id[i-1];
-        current_winner_score[i] <== candidate_wins * (all_scores[i] - current_winner_score[i-1]) + current_winner_score[i-1];
-        current_winner_tiebreak[i] <== candidate_wins * (tiebreaks[i] - current_winner_tiebreak[i-1]) + current_winner_tiebreak[i-1];
+        current_winner_id[i] <== candidate_wins[i] * (all_solver_ids[i] - current_winner_id[i-1]) + current_winner_id[i-1];
+        current_winner_score[i] <== candidate_wins[i] * (all_scores[i] - current_winner_score[i-1]) + current_winner_score[i-1];
+        current_winner_tiebreak[i] <== candidate_wins[i] * (tiebreaks[i] - current_winner_tiebreak[i-1]) + current_winner_tiebreak[i-1];
     }
     
     // =========================================================================
@@ -172,20 +175,21 @@ template MerkleProofVerify(LEVELS) {
     signal levelHashes[LEVELS + 1];
     levelHashes[0] <== leaf;
     
+    // Signals for path reconstruction
+    signal left[LEVELS];
+    signal right[LEVELS];
+
     for (var i = 0; i < LEVELS; i++) {
         hashers[i] = Poseidon(2);
         
         // If bit is 0, leaf is on left; if bit is 1, leaf is on right
-        signal left;
-        signal right;
-        
         // left = bit ? proof : current
         // right = bit ? current : proof
-        left <== indexBits.out[i] * (proof[i] - levelHashes[i]) + levelHashes[i];
-        right <== indexBits.out[i] * (levelHashes[i] - proof[i]) + proof[i];
+        left[i] <== indexBits.out[i] * (proof[i] - levelHashes[i]) + levelHashes[i];
+        right[i] <== indexBits.out[i] * (levelHashes[i] - proof[i]) + proof[i];
         
-        hashers[i].inputs[0] <== left;
-        hashers[i].inputs[1] <== right;
+        hashers[i].inputs[0] <== left[i];
+        hashers[i].inputs[1] <== right[i];
         
         levelHashes[i + 1] <== hashers[i].out;
     }
