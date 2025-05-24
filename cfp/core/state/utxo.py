@@ -120,7 +120,10 @@ class UTXO:
         """
         Compute the nullifier for spending this UTXO (legacy SHA-256).
         
-        nullifier = SHA256(commitment || private_key)
+        SECURITY: nullifier = SHA256(utxo_id || commitment || private_key)
+        
+        Including utxo_id ensures uniqueness even if two UTXOs have identical
+        (value, owner, salt) and thus identical commitments.
         
         Only the owner (with private key) can compute this.
         Publishing the nullifier marks the UTXO as spent.
@@ -135,7 +138,8 @@ class UTXO:
             raise ValueError("Private key must be 32 bytes")
         
         commitment = self.compute_commitment()
-        return sha256(commitment + owner_private_key)
+        # SECURITY: Include utxo_id to ensure uniqueness across UTXOs with same commitment
+        return sha256(self.utxo_id + commitment + owner_private_key)
     
     def compute_nullifier_poseidon(self, nullifier_key: int, merkle_index: int) -> int:
         """

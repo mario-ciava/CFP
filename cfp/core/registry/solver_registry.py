@@ -201,13 +201,20 @@ class SolverRegistry:
             return None, "Public key already registered"
         
         # Verify stake if ledger connected
+        # SECURITY: Verify UTXO ownership to prevent using other users' funds as stake
         stake = initial_stake
         if self.ledger and utxo_ids:
+            from cfp.crypto import keccak256
+            expected_owner = keccak256(public_key)[-20:]
+            
             total_value = 0
             for utxo_id in utxo_ids:
                 utxo = self.ledger.get_utxo(utxo_id)
                 if utxo is None:
                     return None, f"UTXO not found: {utxo_id.hex()}"
+                # SECURITY: Verify the registrant owns this UTXO
+                if utxo.owner != expected_owner:
+                    return None, f"UTXO {utxo_id.hex()[:16]}... not owned by registrant"
                 total_value += utxo.value
             stake = total_value
         
@@ -357,12 +364,19 @@ class SolverRegistry:
             return False, "Amount must be positive"
         
         # Verify UTXOs if ledger connected
+        # SECURITY: Verify UTXO ownership to prevent using other users' funds as stake
         if self.ledger and utxo_ids:
+            from cfp.crypto import keccak256
+            expected_owner = keccak256(solver.public_key)[-20:]
+            
             total_value = 0
             for utxo_id in utxo_ids:
                 utxo = self.ledger.get_utxo(utxo_id)
                 if utxo is None:
                     return False, f"UTXO not found: {utxo_id.hex()}"
+                # SECURITY: Verify the solver owns this UTXO
+                if utxo.owner != expected_owner:
+                    return False, f"UTXO {utxo_id.hex()[:16]}... not owned by solver"
                 total_value += utxo.value
             if total_value < amount:
                 return False, f"UTXO value {total_value} < deposit amount {amount}"

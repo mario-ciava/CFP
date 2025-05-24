@@ -217,6 +217,7 @@ class Ledger:
         self,
         tx: Transaction,
         validate: bool = True,
+        check_signatures: bool = True,
     ) -> Tuple[bool, str]:
         """
         Apply a transaction to the ledger state.
@@ -231,12 +232,14 @@ class Ledger:
         Args:
             tx: Transaction to apply
             validate: Whether to validate first
+            check_signatures: Whether to verify input signatures (SECURITY: default True)
             
         Returns:
             (success, message)
         """
         if validate:
-            is_valid, error = self.validate_transaction(tx, check_signatures=False)
+            # SECURITY: Always check signatures by default to prevent unauthorized spends
+            is_valid, error = self.validate_transaction(tx, check_signatures=check_signatures)
             if not is_valid:
                 return False, error
         
@@ -267,9 +270,40 @@ class Ledger:
         logger.debug(f"Applied tx {bytes_to_hex(tx.tx_hash)[:10]}... ({len(tx.inputs)} in, {len(tx.outputs)} out)")
         return True, "Applied successfully"
     
+    def _create_state_snapshot(self) -> dict:
+        """
+        Create a snapshot of current state for atomic rollback.
+        
+        Returns:
+            State snapshot dictionary
+        """
+        return {
+            'utxo_set': dict(self.utxo_set),
+            'nullifier_set': set(self.nullifier_set),
+            'block_height': self.block_height,
+            'utxo_tree_leaves': list(self.utxo_tree._leaves) if hasattr(self.utxo_tree, '_leaves') else [],
+        }
+    
+    def _restore_state_snapshot(self, snapshot: dict) -> None:
+        """
+        Restore state from a snapshot (for atomic rollback).
+        
+        Args:
+            snapshot: State snapshot from _create_state_snapshot()
+        """
+        self.utxo_set = snapshot['utxo_set']
+        self.nullifier_set = snapshot['nullifier_set']
+        self.block_height = snapshot['block_height']
+        # Restore Merkle tree if we have the leaves
+        if snapshot['utxo_tree_leaves'] and hasattr(self.utxo_tree, '_leaves'):
+            self.utxo_tree._leaves = snapshot['utxo_tree_leaves']
+    
     def apply_block(self, transactions: List[Transaction]) -> Tuple[bool, str]:
         """
-        Apply a block of transactions and create snapshot.
+        Apply a block of transactions atomically with rollback on failure.
+        
+        SECURITY: If any transaction fails, the entire block is rolled back
+        to prevent inconsistent state.
         
         Args:
             transactions: Ordered list of transactions
@@ -277,34 +311,47 @@ class Ledger:
         Returns:
             (success, message)
         """
-        # Apply all transactions
-        for i, tx in enumerate(transactions):
-            success, error = self.apply_transaction(tx)
-            if not success:
-                return False, f"Transaction {i}: {error}"
+        # SECURITY: Take snapshot before applying for atomic rollback
+        state_snapshot = self._create_state_snapshot()
         
-        # Increment block height
-        self.block_height += 1
-        
-        # Create snapshot
-        snapshot = LedgerSnapshot(
-            block_height=self.block_height,
-            state_root=self.state_root,
-            nullifier_count=len(self.nullifier_set),
-            utxo_count=len(self.utxo_set),
-        )
-        self.snapshots.append(snapshot)
-        
-        if self.storage_manager:
-            self.storage_manager.persist_snapshot(
-                snapshot.block_height,
-                snapshot.state_root,
-                snapshot.nullifier_count,
-                snapshot.utxo_count
+        try:
+            # Apply all transactions
+            for i, tx in enumerate(transactions):
+                success, error = self.apply_transaction(tx)
+                if not success:
+                    # SECURITY: Rollback to prevent partial block application
+                    self._restore_state_snapshot(state_snapshot)
+                    logger.warning(f"Block rolled back due to transaction {i} failure: {error}")
+                    return False, f"Transaction {i}: {error}"
+            
+            # Increment block height
+            self.block_height += 1
+            
+            # Create snapshot
+            snapshot = LedgerSnapshot(
+                block_height=self.block_height,
+                state_root=self.state_root,
+                nullifier_count=len(self.nullifier_set),
+                utxo_count=len(self.utxo_set),
             )
-        
-        logger.info(f"Applied block {self.block_height}: {len(transactions)} txs, root={bytes_to_hex(self.state_root)[:10]}...")
-        return True, f"Block {self.block_height} applied"
+            self.snapshots.append(snapshot)
+            
+            if self.storage_manager:
+                self.storage_manager.persist_snapshot(
+                    snapshot.block_height,
+                    snapshot.state_root,
+                    snapshot.nullifier_count,
+                    snapshot.utxo_count
+                )
+            
+            logger.info(f"Applied block {self.block_height}: {len(transactions)} txs, root={bytes_to_hex(self.state_root)[:10]}...")
+            return True, f"Block {self.block_height} applied"
+            
+        except Exception as e:
+            # SECURITY: Rollback on any unexpected error
+            self._restore_state_snapshot(state_snapshot)
+            logger.error(f"Block application failed with exception, rolled back: {e}")
+            return False, f"Block application failed: {e}"
     
     # =========================================================================
     # Genesis

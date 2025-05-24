@@ -29,11 +29,19 @@ This ensures each UTXO can only be spent once.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import secrets
 
 from cfp.crypto import sha256, sign, verify, bytes_to_hex
 from cfp.core.state.utxo import UTXO, address_from_public_key
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# SECURITY: Maximum value that can fit in 8 bytes (used for serialization)
+MAX_VALUE = 2**64 - 1
 
 
 # =============================================================================
@@ -273,6 +281,10 @@ class Transaction:
         if self.fee < 0:
             return False, "Fee cannot be negative"
         
+        # SECURITY: Check fee doesn't exceed max value for serialization
+        if self.fee > MAX_VALUE:
+            return False, f"Fee exceeds maximum value: {self.fee} > {MAX_VALUE}"
+        
         # Check input field lengths
         for i, inp in enumerate(self.inputs):
             if len(inp.tx_hash) != 32:
@@ -280,7 +292,7 @@ class Transaction:
             if len(inp.nullifier) != 32:
                 return False, f"Input {i}: nullifier must be 32 bytes"
         
-        # Check output field lengths
+        # Check output field lengths and value bounds
         for i, out in enumerate(self.outputs):
             if len(out.owner) != 20:
                 return False, f"Output {i}: owner must be 20 bytes"
@@ -288,6 +300,9 @@ class Transaction:
                 return False, f"Output {i}: salt must be 32 bytes"
             if out.value <= 0:
                 return False, f"Output {i}: value must be positive"
+            # SECURITY: Prevent integer overflow at serialization
+            if out.value > MAX_VALUE:
+                return False, f"Output {i}: value exceeds maximum: {out.value} > {MAX_VALUE}"
         
         return True, ""
     
