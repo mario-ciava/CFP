@@ -323,6 +323,150 @@ def node_start(port, connect):
 
 
 # =============================================================================
+# Solver Commands
+# =============================================================================
+
+
+@cli.group()
+def solver():
+    """Solver agent commands"""
+    pass
+
+
+@solver.command("start")
+@click.option("--strategy", default="balanced", type=click.Choice(["aggressive", "balanced", "conservative"]), help="Bidding strategy")
+@click.option("--stake", default=1000, type=int, help="Initial stake amount")
+@click.option("--port", default=9000, type=int, help="Node port to connect to")
+@click.option("--max-intents", default=5, type=int, help="Max concurrent intents")
+@click.pass_context
+def solver_start(ctx, strategy, stake, port, max_intents):
+    """Start automated solver agent"""
+    import asyncio
+    from cfp.crypto import generate_keypair, bytes_to_hex
+    from cfp.core.state import Ledger, address_from_public_key
+    from cfp.core.intent import AuctionManager
+    from cfp.core.intent.solver import MockSolver
+    
+    click.echo("=" * 50)
+    click.echo("  CFP SOLVER AGENT")
+    click.echo("=" * 50)
+    click.echo()
+    
+    # Configure strategy
+    strategy_params = {
+        "aggressive": {"bid_pct": 0.95, "min_margin": 0.02},
+        "balanced": {"bid_pct": 0.85, "min_margin": 0.10},
+        "conservative": {"bid_pct": 0.70, "min_margin": 0.20},
+    }
+    params = strategy_params[strategy]
+    
+    # Initialize solver
+    solver_instance = MockSolver()
+    solver_instance.bid_percentage = params["bid_pct"]
+    
+    address = solver_instance.address
+    
+    click.echo(f"📊 Configuration:")
+    click.echo(f"   Strategy: {strategy}")
+    click.echo(f"   Bid percentage: {params['bid_pct']*100:.0f}%")
+    click.echo(f"   Min profit margin: {params['min_margin']*100:.0f}%")
+    click.echo(f"   Max concurrent: {max_intents}")
+    click.echo()
+    click.echo(f"🔑 Solver Identity:")
+    click.echo(f"   Address: {bytes_to_hex(address)}")
+    click.echo()
+    
+    # Demo mode - simulate solver loop
+    click.echo("⚠️  Running in DEMO mode - no real network connection")
+    click.echo()
+    
+    # Create demo environment
+    ledger = Ledger()
+    auction = AuctionManager()
+    
+    kp_user = generate_keypair()
+    user_addr = address_from_public_key(kp_user.public_key)
+    
+    # Fund solver and user
+    ledger.create_genesis([
+        (address, stake),
+        (user_addr, 10000),
+    ])
+    
+    click.echo(f"✓ Solver funded with {stake} CFP")
+    click.echo(f"✓ Connected to auction manager")
+    click.echo()
+    
+    # Register as solver
+    auction.deposit_bond(address, stake // 2)
+    click.echo(f"✓ Deposited {stake // 2} CFP as bond")
+    click.echo()
+    
+    click.echo("🔄 Monitoring for intents... (Press Ctrl+C to stop)")
+    click.echo()
+    
+    intents_processed = 0
+    
+    try:
+        # Simulate receiving intents
+        import time
+        from cfp.core.intent import create_intent, IntentType
+        
+        while True:
+            time.sleep(3)  # Simulate waiting for intents
+            
+            # Create mock intent
+            intent = create_intent(
+                user_address=user_addr,
+                intent_type=IntentType.TRANSFER,
+                conditions={"recipient": "0x" + bytes_to_hex(address), "amount": 100},
+                max_fee=20,
+                deadline_block=100 + intents_processed * 10,
+                private_key=kp_user.private_key,
+            )
+            
+            click.echo(f"📥 New intent received: {bytes_to_hex(intent.intent_id)[:16]}...")
+            
+            # Create bid
+            bid = solver_instance.create_bid(intent)
+            click.echo(f"   💰 Bid submitted: fee={bid.fee_bid}, bond={bid.bond}")
+            
+            # Simulate winning (in demo, solver always wins)
+            auction.submit_intent(intent)
+            auction.submit_bid(bid)
+            ticket = auction.resolve_auction(intent.intent_id, current_block=10)
+            
+            if ticket:
+                click.echo(f"   🏆 Won auction! Ticket: {bytes_to_hex(ticket.ticket_id)[:12]}...")
+                
+                # Execute intent
+                tx_hash, error = solver_instance.execute_intent(intent, ledger)
+                if tx_hash:
+                    click.echo(f"   ✅ Executed: {bytes_to_hex(tx_hash)[:16]}...")
+                else:
+                    click.echo(f"   ❌ Execution failed: {error}")
+            
+            intents_processed += 1
+            click.echo()
+            
+    except KeyboardInterrupt:
+        click.echo()
+        click.echo(f"Solver stopped. Processed {intents_processed} intents.")
+
+
+@solver.command("status")
+def solver_status():
+    """Show solver status (demo)"""
+    click.echo("Solver Status (Demo)")
+    click.echo("-" * 40)
+    click.echo("  Running: No")
+    click.echo("  Strategy: -")
+    click.echo("  Intents processed: 0")
+    click.echo("  Profit earned: 0 CFP")
+
+
+
+# =============================================================================
 # Transaction Commands
 # =============================================================================
 
