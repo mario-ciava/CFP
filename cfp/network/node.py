@@ -7,7 +7,7 @@ Manages peer connections and message routing.
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Callable, Optional
+from typing import Dict, List, Callable, Optional, TYPE_CHECKING
 
 from cfp.crypto import sha256
 from cfp.network.protocol import (
@@ -20,6 +20,9 @@ from cfp.network.protocol import (
 from cfp.network.peer import Peer, PeerInfo, PeerState
 from cfp.utils.logger import get_logger
 
+if TYPE_CHECKING:
+    from cfp.network.sync import SyncManager
+    from cfp.network.discovery import PeerDiscovery
 
 logger = get_logger("node")
 
@@ -31,6 +34,8 @@ class NodeConfig:
     port: int = 9000
     max_peers: int = 10
     ping_interval: int = 30  # seconds
+    enable_discovery: bool = True
+    enable_sync: bool = True
 
 
 class NetworkNode:
@@ -42,6 +47,8 @@ class NetworkNode:
     - Connecting to peers
     - Message routing and broadcasting
     - Peer authentication via PING/PONG handshake
+    - State synchronization (via SyncManager)
+    - Peer discovery (via PeerDiscovery)
     """
     
     def __init__(self, config: Optional[NodeConfig] = None):
@@ -53,6 +60,10 @@ class NetworkNode:
         self._running = False
         self._message_handlers: Dict[MessageType, Callable] = {}
         
+        # Optional components (lazy initialization)
+        self.sync_manager: Optional["SyncManager"] = None
+        self.discovery: Optional["PeerDiscovery"] = None
+        
         # Register default handlers
         self._register_default_handlers()
     
@@ -60,6 +71,9 @@ class NetworkNode:
         """Register built-in message handlers."""
         self._message_handlers[MessageType.PING] = self._handle_ping
         self._message_handlers[MessageType.PONG] = self._handle_pong
+        self._message_handlers[MessageType.SYNC_REQUEST] = self._handle_sync_request
+        self._message_handlers[MessageType.SYNC_RESPONSE] = self._handle_sync_response
+        self._message_handlers[MessageType.PEER_LIST] = self._handle_peer_list
     
     async def start(self) -> None:
         """Start the network node (listener + peer management)."""
@@ -77,10 +91,24 @@ class NetworkNode:
         
         # Start background tasks
         asyncio.create_task(self._ping_loop())
+        
+        # Start discovery if enabled
+        if self.config.enable_discovery:
+            await self._start_discovery()
+    
+    async def _start_discovery(self) -> None:
+        """Initialize and start peer discovery."""
+        from cfp.network.discovery import PeerDiscovery
+        self.discovery = PeerDiscovery(self)
+        await self.discovery.start()
     
     async def stop(self) -> None:
         """Stop the network node."""
         self._running = False
+        
+        # Stop discovery
+        if self.discovery:
+            await self.discovery.stop()
         
         # Disconnect all peers
         for peer in list(self.peers.values()):
@@ -93,6 +121,10 @@ class NetworkNode:
             await self.server.wait_closed()
         
         logger.info("Node stopped")
+    
+    def set_sync_manager(self, sync_manager: "SyncManager") -> None:
+        """Attach a sync manager to handle state synchronization."""
+        self.sync_manager = sync_manager
     
     async def connect_to_peer(self, host: str, port: int) -> bool:
         """Connect to a peer."""
@@ -202,6 +234,31 @@ class NetworkNode:
         
         logger.debug(f"Pong from {peer.info.host}: {latency}ms")
     
+    async def _handle_sync_request(self, message: Message, peer: Peer) -> None:
+        """Handle SYNC_REQUEST message."""
+        if self.sync_manager:
+            await self.sync_manager.handle_sync_request(message, peer)
+        else:
+            logger.debug("No sync manager configured, ignoring sync request")
+    
+    async def _handle_sync_response(self, message: Message, peer: Peer) -> None:
+        """Handle SYNC_RESPONSE message."""
+        if self.sync_manager:
+            await self.sync_manager.handle_sync_response(message, peer)
+        else:
+            logger.debug("No sync manager configured, ignoring sync response")
+    
+    async def _handle_peer_list(self, message: Message, peer: Peer) -> None:
+        """Handle PEER_LIST message (request or response)."""
+        if self.discovery:
+            # Check if request (payload starts with 0x00) or response (0x01)
+            if message.payload and message.payload[0] == 0x00:
+                await self.discovery.handle_peer_list_request(message, peer)
+            else:
+                await self.discovery.handle_peer_list_response(message, peer)
+        else:
+            logger.debug("No discovery configured, ignoring peer list message")
+    
     async def _ping_loop(self) -> None:
         """Periodically ping all peers."""
         while self._running:
@@ -217,3 +274,4 @@ class NetworkNode:
     
     def get_peer_info(self) -> List[PeerInfo]:
         return [p.info for p in self.peers.values()]
+

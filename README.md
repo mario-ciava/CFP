@@ -4,7 +4,7 @@
 
 [![Status](https://img.shields.io/badge/Status-Research%20Prototype-blue)]()
 [![Python](https://img.shields.io/badge/Python-3.11+-green)]()
-[![Tests](https://img.shields.io/badge/Tests-252%20passing-success)]()
+[![Tests](https://img.shields.io/badge/Tests-280%20passing-success)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow)]()
 
 ## ⚠️ Disclaimer
@@ -51,9 +51,9 @@ cfp/
 ├── docs/                   # Documentation
 │   ├── documentation.md    # Technical reference
 │   ├── specification.md    # Protocol specification
-│   └── master_plan.md      # Development roadmap
+│   └── security_audit.md   # Security audit report
 └── tests/                  # Pytest test suite
-    ├── unit/               # Unit tests (252 tests)
+    ├── unit/               # Unit tests (280 tests)
     └── integration/        # Integration tests
 ```
 
@@ -142,7 +142,7 @@ pytest tests/ --cov=cfp --cov-report=html
 |----------|-------------|
 | [Technical Reference](docs/documentation.md) | Detailed explanations of all components |
 | [Protocol Specification](docs/specification.md) | Formal protocol definition and threat model |
-| [Development Roadmap](docs/master_plan.md) | Project phases and status |
+| [Security Audit](docs/security_audit.md) | Security review and vulnerability fixes |
 
 ---
 
@@ -162,7 +162,7 @@ pytest tests/ --cov=cfp --cov-report=html
 open htmlcov/index.html
 ```
 
-**Test Coverage**: 252 tests across 17 test files covering unit and integration scenarios.
+**Test Coverage**: 280 tests across 17 test files covering unit and integration scenarios.
 
 ---
 
