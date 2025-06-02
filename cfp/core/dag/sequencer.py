@@ -57,6 +57,9 @@ logger = get_logger("dag")
 # Orphan Pool
 # =============================================================================
 
+# Maximum orphan pool size to prevent memory exhaustion
+MAX_ORPHAN_POOL_SIZE = 10000
+
 
 @dataclass
 class OrphanPool:
@@ -67,25 +70,54 @@ class OrphanPool:
     it's placed in the orphan pool. When the missing parent arrives,
     we attempt to process orphans again.
     
+    SECURITY: Pool is bounded to MAX_ORPHAN_POOL_SIZE to prevent DoS.
+    When full, oldest orphan (by timestamp) is evicted.
+    
     Structure:
         orphans: vertex_id -> Vertex (orphaned vertices)
         waiting_on: missing_parent_id -> [vertex_ids waiting for it]
     """
     orphans: Dict[bytes, Vertex] = field(default_factory=dict)
     waiting_on: Dict[bytes, Set[bytes]] = field(default_factory=lambda: defaultdict(set))
+    max_size: int = MAX_ORPHAN_POOL_SIZE
     
     def add(self, vertex: Vertex, missing_parents: List[bytes]) -> None:
         """
         Add a vertex to the orphan pool.
         
+        SECURITY: If pool is at capacity, evicts oldest orphan first.
+        
         Args:
             vertex: The orphaned vertex
             missing_parents: List of parent IDs that are missing
         """
+        # SECURITY: Evict oldest orphan if at capacity
+        if len(self.orphans) >= self.max_size:
+            self._evict_oldest()
+        
         self.orphans[vertex.vertex_id] = vertex
         for parent_id in missing_parents:
             self.waiting_on[parent_id].add(vertex.vertex_id)
         logger.debug(f"Orphaned vertex {vertex.vertex_id.hex()[:8]}... waiting on {len(missing_parents)} parents")
+    
+    def _evict_oldest(self) -> None:
+        """Evict the oldest orphan by timestamp."""
+        if not self.orphans:
+            return
+        
+        oldest = min(self.orphans.values(), key=lambda v: v.timestamp)
+        oldest_id = oldest.vertex_id
+        
+        # Remove from orphans
+        del self.orphans[oldest_id]
+        
+        # Clean up waiting_on references
+        for parent_id in list(self.waiting_on.keys()):
+            self.waiting_on[parent_id].discard(oldest_id)
+            if not self.waiting_on[parent_id]:
+                del self.waiting_on[parent_id]
+        
+        logger.warning(f"Evicted oldest orphan {oldest_id.hex()[:8]}... (pool at capacity)")
     
     def get_ready(self, arrived_parent_id: bytes) -> List[Vertex]:
         """

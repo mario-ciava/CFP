@@ -40,6 +40,14 @@ logger = get_logger("ledger")
 
 
 # =============================================================================
+# Rate Limiting
+# =============================================================================
+
+# Maximum transactions per address per block
+MAX_TX_PER_ADDRESS_PER_BLOCK = 10
+
+
+# =============================================================================
 # Ledger State
 # =============================================================================
 
@@ -71,12 +79,19 @@ class Ledger:
         block_height: Current block height
     """
     
-    def __init__(self, storage_manager: Optional[StorageManager] = None):
+    def __init__(
+        self,
+        storage_manager: Optional[StorageManager] = None,
+        fee_manager = None,
+        max_tx_per_address: int = MAX_TX_PER_ADDRESS_PER_BLOCK,
+    ):
         """
         Initialize the ledger.
         
         Args:
             storage_manager: Persistence manager. None = in-memory only.
+            fee_manager: Optional FeeManager for fee distribution.
+            max_tx_per_address: Rate limit per address per block.
         """
         # UTXO storage
         self.utxo_set: Dict[bytes, UTXO] = {}  # utxo_id -> UTXO
@@ -91,6 +106,13 @@ class Ledger:
         
         # Persistence
         self.storage_manager = storage_manager
+        
+        # Fee management
+        self.fee_manager = fee_manager
+        
+        # Rate limiting
+        self.max_tx_per_address = max_tx_per_address
+        self._tx_count_by_address: Dict[bytes, int] = {}  # Reset each block
         
         if storage_manager:
             self._load_from_storage()
@@ -207,6 +229,12 @@ class Ledger:
                 if not owner_verified:
                     return False, f"Input {i}: Invalid signature or owner mismatch"
         
+        # Rate limiting check (per input owner)
+        for utxo in input_utxos:
+            current_count = self._tx_count_by_address.get(utxo.owner, 0)
+            if current_count >= self.max_tx_per_address:
+                return False, f"Rate limit exceeded for address {bytes_to_hex(utxo.owner)[:10]}..."
+        
         return True, ""
     
     # =========================================================================
@@ -247,6 +275,13 @@ class Ledger:
         if not tx.tx_hash:
             tx.finalize()
         
+        # Capture input owners BEFORE removing UTXOs (for rate limiting)
+        input_owners: Set[bytes] = set()
+        for inp in tx.inputs:
+            utxo = self.utxo_set.get(inp.utxo_id)
+            if utxo:
+                input_owners.add(utxo.owner)
+        
         # Add nullifiers
         for inp in tx.inputs:
             self.nullifier_set.add(inp.nullifier)
@@ -266,6 +301,14 @@ class Ledger:
         # Persist if enabled
         if self.storage_manager:
             self._persist_transaction(tx)
+        
+        # Update rate limit counter for input owners
+        for owner in input_owners:
+            self._tx_count_by_address[owner] = self._tx_count_by_address.get(owner, 0) + 1
+        
+        # Process fees with FeeManager
+        if self.fee_manager and tx.fee > 0:
+            self.fee_manager.process_fee(tx.tx_hash, tx.fee)
         
         logger.debug(f"Applied tx {bytes_to_hex(tx.tx_hash)[:10]}... ({len(tx.inputs)} in, {len(tx.outputs)} out)")
         return True, "Applied successfully"
@@ -345,6 +388,10 @@ class Ledger:
                 )
             
             logger.info(f"Applied block {self.block_height}: {len(transactions)} txs, root={bytes_to_hex(self.state_root)[:10]}...")
+            
+            # Reset rate limiting for new block
+            self._tx_count_by_address.clear()
+            
             return True, f"Block {self.block_height} applied"
             
         except Exception as e:

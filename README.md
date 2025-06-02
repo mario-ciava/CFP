@@ -1,19 +1,19 @@
-# 🌊 Convergent Flow Protocol (CFP)
+# Convergent Flow Protocol (CFP)
 
-> **A research blockchain prototype exploring DAG-based sequencing, ZK provers, intent auctions, and UTXO state models.**
+> **A research blockchain prototype exploring DAG-based sequencing, ZK provers, intent auctions and UTXO state models.**
 
 [![Status](https://img.shields.io/badge/Status-Research%20Prototype-blue)]()
 [![Python](https://img.shields.io/badge/Python-3.11+-green)]()
 [![Tests](https://img.shields.io/badge/Tests-280%20passing-success)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow)]()
 
-## ⚠️ Disclaimer
+## Disclaimer
 
 This is a **research prototype** designed to explore and demonstrate blockchain concepts. It is **not production-ready** and should not be used for managing real value. Focus is on correctness and verifiability, not performance or economic security.
 
 ---
 
-## 🎯 Overview
+## Overview
 
 CFP implements an **Intent-Centric Execution Layer** with:
 
@@ -27,7 +27,7 @@ CFP implements an **Intent-Centric Execution Layer** with:
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 cfp/
@@ -59,7 +59,7 @@ cfp/
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -107,36 +107,36 @@ pytest tests/ --cov=cfp --cov-report=html
 
 ---
 
-## 🏗️ Core Components
+## Core Components
 
 ### DAG Sequencer (`cfp/core/dag/`)
-- **Vertex**: Atomic unit containing transaction/intent payload
-- **Sequencer**: Maintains graph, validates structure, linearizes via Kahn's algorithm
-- **Orphan Pool**: Handles out-of-order vertex arrival
+- **Vertex**: atomic unit containing transaction/intent payload
+- **Sequencer**: maintains graph, validates structure, linearizes via Kahn's algorithm
+- **Orphan Pool**: handles out-of-order vertex arrival
 
 ### Verifiable Auction (`cfp/core/auction/`, `cfp/core/intent/`)
-- **Commit-Reveal**: Sealed-bid auction preventing bid sniping
-- **Scoring**: Deterministic utility with Poseidon-based tie-breaking
-- **Transcript**: Merkle commitment binding all bids for ZK verification
+- **Commit-Reveal**: sealed-bid auction preventing bid sniping
+- **Scoring**: deterministic utility with Poseidon-based tie-breaking
+- **Transcript**: merkle commitment binding all bids for ZK verification
 
 ### UTXO Ledger (`cfp/core/state/`)
 - **Transaction**: UTXO model with inputs, outputs, nullifiers
-- **Ledger**: State management with double-spend prevention
-- **Merkle Tree**: Poseidon-based for ZK compatibility
+- **Ledger**: state management with double-spend prevention
+- **Merkle Tree**: poseidon-based for ZK compatibility
 
 ### ZK Provers (`cfp/core/prover/`, `circuits/`)
-- **auction_select.circom**: Proves correct winner selection
-- **intent_satisfy.circom**: Proves solution matches constraints
-- **utxo_transition.circom**: Proves valid state transitions
+- **auction_select.circom**: proves correct winner selection
+- **intent_satisfy.circom**: proves solution matches constraints
+- **utxo_transition.circom**: proves valid state transitions
 
 ### Solver Registry (`cfp/core/registry/`)
-- **Registration**: Stake-backed identity management
-- **Slashing**: Penalties for auction violations
-- **Sybil Resistance**: Economic barrier to identity grinding
+- **Registration**: stake-backed identity management
+- **Slashing**: penalties for auction violations
+- **Sybil Resistance**: economic barrier to identity grinding
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Document | Description |
 |----------|-------------|
@@ -146,7 +146,7 @@ pytest tests/ --cov=cfp --cov-report=html
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run all tests
@@ -166,20 +166,20 @@ open htmlcov/index.html
 
 ---
 
-## 🔐 Security Considerations
+## Security Considerations
 
 This is a **research prototype**. Notable security aspects:
 
-- **ZK Circuits**: Not audited - for educational purposes only
-- **Trusted Setup**: Single-party setup (toxic waste not properly discarded)
-- **Networking**: Basic P2P without DoS protection or peer discovery
-- **Cryptography**: Standard primitives (secp256k1, Poseidon) but not audited
+- **ZK Circuits**: not audited - for educational purposes only
+- **Trusted Setup**: single-party setup (toxic waste not properly discarded)
+- **Networking**: basic P2P without DoS protection or peer discovery
+- **Cryptography**: standard primitives (secp256k1, Poseidon) but not audited
 
 **Do not use for real value.**
 
 ---
 
-## 📖 Development
+## Development
 
 ### Code Style
 
@@ -203,20 +203,16 @@ mypy cfp/
 
 ---
 
-## 📄 License
-
-MIT License - Research and educational use only.
-
----
-
-## 🤝 Contributing
+## Contributing
 
 This is a research project. Contributions welcome for:
-- Bug fixes
-- Documentation improvements
-- Additional test coverage
-- Performance optimizations
+- bug fixes
+- documentation improvements
+- additional test coverage
+- performance optimizations
 
 ---
 
-*Built as a learning exercise in blockchain protocol design.*
+## License
+
+See [LICENSE](./LICENSE).
