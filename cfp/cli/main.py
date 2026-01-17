@@ -1,0 +1,636 @@
+"""
+CFP CLI - Command Line Interface for Convergent Flow Protocol
+
+Main entry point for all CLI commands.
+"""
+
+import json
+from pathlib import Path
+from typing import Optional
+
+import click
+
+from cfp.utils.logger import setup_logging
+
+
+def decrypt_wallet_key(wallet_data: dict, wallet_name: str, password: str) -> Optional[bytes]:
+    """
+    Decrypt a wallet's private key.
+
+    Args:
+        wallet_data: Loaded wallet JSON data
+        wallet_name: Wallet name (used as salt)
+        password: User's password
+
+    Returns:
+        Decrypted private key bytes, or None on failure
+    """
+    import base64
+    import hashlib
+
+    from cryptography.fernet import Fernet, InvalidToken
+
+    from cfp.crypto import hex_to_bytes
+
+    # Check for legacy plaintext wallet
+    if "private_key" in wallet_data:
+        return hex_to_bytes(wallet_data["private_key"])
+
+    # Decrypt encrypted wallet
+    if "encrypted_private_key" not in wallet_data:
+        return None
+
+    try:
+        salt = wallet_name.encode()
+        key = base64.urlsafe_b64encode(
+            hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
+        )
+        fernet = Fernet(key)
+        return fernet.decrypt(wallet_data["encrypted_private_key"].encode())
+    except InvalidToken:
+        return None
+
+
+@click.group()
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+@click.option("--data-dir", default="~/.cfp", help="Data directory")
+@click.version_option(version="0.2.0")
+@click.pass_context
+def cli(ctx, debug, data_dir):
+    """Convergent Flow Protocol - Research blockchain prototype"""
+    import logging
+
+    level = logging.DEBUG if debug else logging.INFO
+    setup_logging(level=level)
+
+    ctx.ensure_object(dict)
+    ctx.obj["data_dir"] = Path(data_dir).expanduser()
+    ctx.obj["data_dir"].mkdir(parents=True, exist_ok=True)
+
+
+# =============================================================================
+# Wallet Commands
+# =============================================================================
+
+@cli.group()
+def wallet():
+    """Wallet management commands"""
+    pass
+
+
+@wallet.command("create")
+@click.option("--name", default="default", help="Wallet name")
+@click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True, help="Encryption password")
+@click.pass_context
+def wallet_create(ctx, name, password):
+    """Create a new encrypted wallet"""
+    import base64
+    import hashlib
+
+    from cryptography.fernet import Fernet
+
+    from cfp.core.state import address_from_public_key
+    from cfp.crypto import bytes_to_hex, generate_keypair
+
+    kp = generate_keypair()
+    address = address_from_public_key(kp.public_key)
+
+    # Derive encryption key from password using PBKDF2
+    salt = name.encode()  # Use wallet name as salt (deterministic per wallet)
+    key = base64.urlsafe_b64encode(
+        hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
+    )
+    fernet = Fernet(key)
+
+    # Encrypt private key
+    encrypted_private_key = fernet.encrypt(kp.private_key).decode('utf-8')
+
+    wallet_path = ctx.obj["data_dir"] / "wallets" / f"{name}.json"
+    wallet_path.parent.mkdir(parents=True, exist_ok=True)
+
+    wallet_data = {
+        "name": name,
+        "address": bytes_to_hex(address),
+        "encrypted_private_key": encrypted_private_key,  # Encrypted!
+        "public_key": bytes_to_hex(kp.public_key),
+    }
+
+    wallet_path.write_text(json.dumps(wallet_data, indent=2))
+
+    click.echo(f"✓ Wallet created: {name}")
+    click.echo(f"  Address: {bytes_to_hex(address)}")
+    click.echo(f"  Saved to: {wallet_path}")
+    click.echo("  ⚠️  Remember your password - it cannot be recovered!")
+
+
+@wallet.command("list")
+@click.pass_context
+def wallet_list(ctx):
+    """List all wallets"""
+    wallet_dir = ctx.obj["data_dir"] / "wallets"
+    if not wallet_dir.exists():
+        click.echo("No wallets found.")
+        return
+
+    for wallet_file in wallet_dir.glob("*.json"):
+        data = json.loads(wallet_file.read_text())
+        click.echo(f"  {data['name']}: {data['address']}")
+
+
+@wallet.command("balance")
+@click.argument("address")
+@click.pass_context
+def wallet_balance(ctx, address):
+    """Get wallet balance from the locally persisted ledger (if any)."""
+    click.echo(f"Address: {address}")
+
+    db_path = ctx.obj["data_dir"] / "node.db"
+    if not db_path.exists():
+        click.echo("Balance: unavailable (no local chain state; run a node and sync first)")
+        return
+
+    from cfp.core.state.ledger import Ledger
+    from cfp.core.storage.storage_manager import StorageManager
+    from cfp.crypto import hex_to_bytes
+
+    try:
+        addr = hex_to_bytes(address)[-20:]
+    except Exception:
+        click.echo("Balance: invalid address")
+        return
+
+    ledger = Ledger(storage_manager=StorageManager(ctx.obj["data_dir"]))
+    click.echo(f"Balance: {ledger.get_balance(addr)} CFP")
+
+
+# =============================================================================
+# Demo Command
+# =============================================================================
+
+
+@cli.command("demo")
+@click.option("--scenario", default="basic", help="Demo scenario to run")
+def demo(scenario):
+    """Run interactive demo of CFP capabilities"""
+    import secrets as _secrets
+
+    from cfp.core.auction import create_commitment
+    from cfp.core.dag import DAGSequencer, PayloadType, create_genesis_vertex, create_vertex
+    from cfp.core.intent import IntentType, create_intent
+    from cfp.core.intent.verifiable_auction import (
+        VerifiableAuctionConfig,
+        VerifiableAuctionManager,
+    )
+    from cfp.core.prover import ProverManager
+    from cfp.core.state import Ledger, address_from_public_key, create_transfer
+    from cfp.core.tokenomics import FeeManager
+    from cfp.crypto import bytes_to_hex, generate_keypair
+
+    click.echo("=" * 60)
+    click.echo("  CONVERGENT FLOW PROTOCOL - DEMO")
+    click.echo("=" * 60)
+    click.echo()
+
+    # Setup
+    click.echo("📦 Initializing components...")
+    kp_alice = generate_keypair()
+    kp_bob = generate_keypair()
+    kp_solver = generate_keypair()
+
+    alice = address_from_public_key(kp_alice.public_key)
+    bob = address_from_public_key(kp_bob.public_key)
+    solver = address_from_public_key(kp_solver.public_key)
+
+    ledger = Ledger()
+    dag = DAGSequencer()
+    prover = ProverManager(use_mock=True, batch_size=10)
+    fees = FeeManager()
+
+    click.echo("  ✓ Ledger, DAG, Prover, Auction, Fees initialized")
+    click.echo()
+
+    # Genesis
+    click.echo("🏛️  Creating genesis...")
+    genesis = create_genesis_vertex(kp_alice)
+    dag.add_vertex(genesis)
+    ledger.create_genesis([(alice, 10000), (solver, 5000)])
+    click.echo("  ✓ Genesis block created")
+    click.echo(f"  ✓ Alice balance: {ledger.get_balance(alice)} CFP")
+    click.echo(f"  ✓ Solver balance: {ledger.get_balance(solver)} CFP")
+    click.echo()
+
+    # Transfer
+    click.echo("💸 Alice sends 500 CFP to Bob...")
+    utxos = ledger.get_utxos_for_address(alice)
+    tx = create_transfer(
+        inputs=[(utxos[0], kp_alice.private_key)],
+        recipients=[(bob, 500), (alice, 9490)],  # 10 fee
+        fee=10,
+    )
+    ledger.apply_transaction(tx)
+    fees.process_fee(tx.tx_hash, 10)
+
+    v1 = create_vertex([genesis.vertex_id], tx.to_bytes(), PayloadType.TRANSACTION, kp_alice)
+    dag.add_vertex(v1)
+
+    click.echo("  ✓ Transaction applied")
+    click.echo(f"  ✓ Alice: {ledger.get_balance(alice)} CFP")
+    click.echo(f"  ✓ Bob: {ledger.get_balance(bob)} CFP")
+    click.echo()
+
+    # Intent + verifiable commit-reveal auction (the CANONICAL CFP auction).
+    click.echo("🎯 Bob submits an intent (verifiable commit-reveal auction)...")
+    vauction = VerifiableAuctionManager(VerifiableAuctionConfig(
+        min_solver_stake=100, min_bid_bond=10, commit_window=3, reveal_window=2,
+    ))
+    kp_solver2 = generate_keypair()
+    sid1, _ = vauction.register_solver(kp_solver.public_key, 500)
+    sid2, _ = vauction.register_solver(kp_solver2.public_key, 500)
+
+    intent = create_intent(
+        user_address=bob,
+        intent_type=IntentType.TRANSFER,
+        conditions={"recipient": "0x" + bytes_to_hex(alice), "amount": 100},
+        max_fee=50,
+        deadline_block=100,
+        private_key=kp_bob.private_key,
+    )
+    vauction.submit_intent(intent)
+    click.echo(f"  ✓ Intent submitted: {bytes_to_hex(intent.intent_id)[:16]}...")
+    click.echo(f"  ✓ Two solvers registered (ids …{str(sid1)[-8:]}, …{str(sid2)[-8:]})")
+
+    # Sealed commitments (bids hidden until reveal).
+    salt1, salt2 = _secrets.randbelow(2**128), _secrets.randbelow(2**128)
+    score1, score2 = 30, 45  # solver 2 offers the better score
+    vauction.submit_commit(intent.intent_id, sid1, create_commitment(intent.intent_id, sid1, score1, 111, salt1))
+    vauction.submit_commit(intent.intent_id, sid2, create_commitment(intent.intent_id, sid2, score2, 222, salt2))
+    click.echo("  ✓ Two sealed commitments submitted (bids hidden)")
+
+    # Advance past commit window -> reveal -> finalize.
+    vauction.on_new_block(vauction.current_block + 3)
+    vauction.submit_reveal(intent.intent_id, sid1, score1, 111, salt1)
+    vauction.submit_reveal(intent.intent_id, sid2, score2, 222, salt2)
+    vauction.on_new_block(vauction.current_block + 2)
+
+    auction_obj = vauction.get_auction(intent.intent_id)
+    winner = auction_obj.winner_solver_id
+    click.echo(f"  ✓ Auction finalized: state={auction_obj.state.name}, winner=solver …{str(winner)[-8:]} (best score)")
+    click.echo(f"  ✓ ZK winner-selection proof generated: {vauction.get_proof(intent.intent_id) is not None}")
+    click.echo()
+
+    # ZK Proof
+    click.echo("🔐 Generating ZK proof for batch...")
+    proof, _ = prover.generate_batch_proof(
+        batch_start=0,
+        batch_end=10,
+        old_state_root=bytes(32),
+        new_state_root=ledger.state_root,
+        transactions=[tx.to_bytes()],
+    )
+    click.echo(f"  ✓ Proof generated in {proof.proving_time_ms}ms")
+    click.echo(f"  ✓ Proof ID: {bytes_to_hex(proof.proof_id)[:16]}...")
+    click.echo()
+
+    # Stats
+    click.echo("📊 Final Statistics:")
+    click.echo(f"  DAG: {dag.vertex_count()} vertices, {len(dag.get_tips())} tips")
+    click.echo(f"  Ledger: {len(ledger.utxo_set)} UTXOs, {len(ledger.nullifier_set)} nullifiers")
+    click.echo(f"  State Root: {bytes_to_hex(ledger.state_root)[:16]}...")
+    click.echo(f"  Fees: {fees.stats()}")
+    click.echo()
+    click.echo("✅ Demo complete!")
+
+
+# =============================================================================
+# Stats Command
+# =============================================================================
+
+
+@cli.command("stats")
+def stats():
+    """Show system statistics"""
+    click.echo("CFP System Statistics")
+    click.echo("-" * 40)
+    click.echo("  Version: 0.1.0")
+    click.echo("  Modules: DAG, UTXO, Prover, Intent, Storage, Network")
+    click.echo("  Tests: run `pytest tests/`")
+    click.echo("  Status: Research prototype")
+
+
+# Node Commands
+# =============================================================================
+
+
+@cli.group()
+def node():
+    """Node management commands"""
+    pass
+
+
+@node.command("start")
+@click.option("--port", default=9000, help="P2P port")
+@click.option("--connect", default=None, help="Peer to connect to (host:port)")
+def node_start(port, connect):
+    """Start CFP P2P node"""
+    import asyncio
+
+    from cfp.network import NetworkNode, NodeConfig
+
+    async def run_node():
+        config = NodeConfig(port=port)
+        node = NetworkNode(config)
+        await node.start()
+
+        if connect:
+            host, peer_port = connect.split(":")
+            click.echo(f"Connecting to {host}:{peer_port}...")
+            await node.connect_to_peer(host, int(peer_port))
+
+        click.echo(f"Node running on port {port}. Press Ctrl+C to stop.")
+
+        try:
+            while True:
+                await asyncio.sleep(10)
+                click.echo(f"  Peers: {node.peer_count}")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await node.stop()
+
+    try:
+        asyncio.run(run_node())
+    except KeyboardInterrupt:
+        click.echo("\nNode stopped.")
+
+
+# =============================================================================
+# Solver Commands
+# =============================================================================
+
+
+@cli.group()
+def solver():
+    """Solver agent commands"""
+    pass
+
+
+@solver.command("start")
+@click.option("--strategy", default="balanced", type=click.Choice(["aggressive", "balanced", "conservative"]), help="Bidding strategy")
+@click.option("--stake", default=1000, type=int, help="Initial stake amount")
+@click.option("--port", default=9000, type=int, help="Node port to connect to")
+@click.option("--max-intents", default=5, type=int, help="Max concurrent intents")
+@click.pass_context
+def solver_start(ctx, strategy, stake, port, max_intents):
+    """Start automated solver agent"""
+    from cfp.core.intent import AuctionManager
+    from cfp.core.intent.solver import MockSolver
+    from cfp.core.state import Ledger, address_from_public_key
+    from cfp.crypto import bytes_to_hex, generate_keypair
+
+    click.echo("=" * 50)
+    click.echo("  CFP SOLVER AGENT")
+    click.echo("=" * 50)
+    click.echo()
+
+    # Configure strategy
+    strategy_params = {
+        "aggressive": {"bid_pct": 0.95, "min_margin": 0.02},
+        "balanced": {"bid_pct": 0.85, "min_margin": 0.10},
+        "conservative": {"bid_pct": 0.70, "min_margin": 0.20},
+    }
+    params = strategy_params[strategy]
+
+    # Initialize solver
+    solver_instance = MockSolver()
+    solver_instance.bid_percentage = params["bid_pct"]
+
+    address = solver_instance.address
+
+    click.echo("📊 Configuration:")
+    click.echo(f"   Strategy: {strategy}")
+    click.echo(f"   Bid percentage: {params['bid_pct']*100:.0f}%")
+    click.echo(f"   Min profit margin: {params['min_margin']*100:.0f}%")
+    click.echo(f"   Max concurrent: {max_intents}")
+    click.echo()
+    click.echo("🔑 Solver Identity:")
+    click.echo(f"   Address: {bytes_to_hex(address)}")
+    click.echo()
+
+    # Demo mode - simulate solver loop
+    click.echo("⚠️  Running in DEMO mode - no real network connection")
+    click.echo()
+
+    # Create demo environment
+    ledger = Ledger()
+    auction = AuctionManager()
+
+    kp_user = generate_keypair()
+    user_addr = address_from_public_key(kp_user.public_key)
+
+    # Fund solver and user
+    ledger.create_genesis([
+        (address, stake),
+        (user_addr, 10000),
+    ])
+
+    click.echo(f"✓ Solver funded with {stake} CFP")
+    click.echo("✓ Connected to auction manager")
+    click.echo()
+
+    # Register as solver
+    auction.deposit_bond(address, stake // 2)
+    click.echo(f"✓ Deposited {stake // 2} CFP as bond")
+    click.echo()
+
+    click.echo("🔄 Monitoring for intents... (Press Ctrl+C to stop)")
+    click.echo()
+
+    intents_processed = 0
+
+    try:
+        # Simulate receiving intents
+        import time
+
+        from cfp.core.intent import IntentType, create_intent
+
+        while True:
+            time.sleep(3)  # Simulate waiting for intents
+
+            # Create mock intent
+            intent = create_intent(
+                user_address=user_addr,
+                intent_type=IntentType.TRANSFER,
+                conditions={"recipient": "0x" + bytes_to_hex(address), "amount": 100},
+                max_fee=20,
+                deadline_block=100 + intents_processed * 10,
+                private_key=kp_user.private_key,
+            )
+
+            click.echo(f"📥 New intent received: {bytes_to_hex(intent.intent_id)[:16]}...")
+
+            # Create bid
+            bid = solver_instance.create_bid(intent)
+            click.echo(f"   💰 Bid submitted: fee={bid.fee_bid}, bond={bid.bond}")
+
+            # Simulate winning (in demo, solver always wins)
+            auction.submit_intent(intent)
+            auction.submit_bid(bid)
+            ticket = auction.resolve_auction(intent.intent_id, current_block=10)
+
+            if ticket:
+                click.echo(f"   🏆 Won auction! Ticket: {bytes_to_hex(ticket.ticket_id)[:12]}...")
+
+                # Execute intent
+                tx_hash, error = solver_instance.execute_intent(intent, ledger)
+                if tx_hash:
+                    click.echo(f"   ✅ Executed: {bytes_to_hex(tx_hash)[:16]}...")
+                else:
+                    click.echo(f"   ❌ Execution failed: {error}")
+
+            intents_processed += 1
+            click.echo()
+
+    except KeyboardInterrupt:
+        click.echo()
+        click.echo(f"Solver stopped. Processed {intents_processed} intents.")
+
+
+@solver.command("status")
+def solver_status():
+    """Show solver status (demo)"""
+    click.echo("Solver Status (Demo)")
+    click.echo("-" * 40)
+    click.echo("  Running: No")
+    click.echo("  Strategy: -")
+    click.echo("  Intents processed: 0")
+    click.echo("  Profit earned: 0 CFP")
+
+
+
+# =============================================================================
+# Transaction Commands
+# =============================================================================
+
+
+@cli.group()
+def tx():
+    """Transaction commands"""
+    pass
+
+
+@tx.command("send")
+@click.option("--from", "from_wallet", required=True, help="Sender wallet name")
+@click.option("--to", required=True, help="Recipient address (0x...)")
+@click.option("--amount", required=True, type=int, help="Amount to send")
+@click.option("--fee", default=10, type=int, help="Transaction fee")
+@click.pass_context
+def tx_send(ctx, from_wallet, to, amount, fee):
+    """Send a transaction (demo mode)"""
+    from cfp.core.state import Ledger, address_from_public_key, create_transfer
+    from cfp.crypto import bytes_to_hex, generate_keypair, hex_to_bytes
+
+    # Load wallet
+    wallet_path = ctx.obj["data_dir"] / "wallets" / f"{from_wallet}.json"
+    if not wallet_path.exists():
+        click.echo(f"❌ Wallet '{from_wallet}' not found")
+        click.echo(f"   Create with: cfp wallet create --name {from_wallet}")
+        return
+
+    wallet_data = json.loads(wallet_path.read_text())
+
+    click.echo("Transaction (Demo Mode)")
+    click.echo("-" * 40)
+    click.echo(f"  From: {wallet_data['name']} ({wallet_data['address'][:12]}...)")
+    click.echo(f"  To: {to[:12]}...")
+    click.echo(f"  Amount: {amount} CFP")
+    click.echo(f"  Fee: {fee} CFP")
+    click.echo("")
+
+    # Demo: simulate transaction
+    click.echo("⚠️  Demo mode: transactions are simulated, not persisted")
+    click.echo("")
+
+    # Create demo ledger with sender balance
+    ledger = Ledger()
+    sender_kp = generate_keypair()
+    sender_addr = address_from_public_key(sender_kp.public_key)
+    recipient_addr = hex_to_bytes(to)
+
+    ledger.create_genesis([(sender_addr, 10000)])
+
+    # Create transaction
+    utxos = ledger.get_utxos_for_address(sender_addr)
+    change = 10000 - amount - fee
+
+    if change < 0:
+        click.echo("❌ Insufficient balance for amount + fee")
+        return
+
+    tx = create_transfer(
+        inputs=[(utxos[0], sender_kp.private_key)],
+        recipients=[(recipient_addr, amount), (sender_addr, change)],
+        fee=fee,
+    )
+
+    success, msg = ledger.apply_transaction(tx)
+
+    if success:
+        click.echo("✅ Transaction created")
+        click.echo(f"   TX Hash: {bytes_to_hex(tx.tx_hash)[:20]}...")
+        click.echo("   Status: Applied (demo)")
+    else:
+        click.echo(f"❌ Transaction failed: {msg}")
+
+
+# =============================================================================
+# DAG Commands
+# =============================================================================
+
+
+@cli.group()
+def dag():
+    """DAG inspection commands"""
+    pass
+
+
+@dag.command("show")
+@click.option("--limit", default=10, help="Max vertices to show")
+def dag_show(limit):
+    """Show DAG structure (demo mode)"""
+    from cfp.core.dag import DAGSequencer, PayloadType, create_genesis_vertex, create_vertex
+    from cfp.crypto import bytes_to_hex, generate_keypair
+
+    click.echo("DAG Structure (Demo)")
+    click.echo("-" * 40)
+
+    # Create demo DAG
+    kp = generate_keypair()
+    dag = DAGSequencer()
+
+    genesis = create_genesis_vertex(kp)
+    dag.add_vertex(genesis)
+
+    # Add some vertices
+    v1 = create_vertex([genesis.vertex_id], b"tx1", PayloadType.TRANSACTION, kp)
+    v2 = create_vertex([genesis.vertex_id], b"tx2", PayloadType.TRANSACTION, kp)
+    dag.add_vertex(v1)
+    dag.add_vertex(v2)
+
+    v3 = create_vertex([v1.vertex_id, v2.vertex_id], b"merge", PayloadType.TRANSACTION, kp)
+    dag.add_vertex(v3)
+
+    # Display
+    click.echo(f"  Total vertices: {dag.vertex_count()}")
+    click.echo(f"  Tips: {len(dag.get_tips())}")
+    click.echo("")
+    click.echo("  Linearized order:")
+
+    for i, vid in enumerate(dag.linearize()[:limit]):
+        v = dag.get_vertex(vid)
+        short_id = bytes_to_hex(vid)[:10]
+        parents = len(v.parents)
+        click.echo(f"    {i+1}. {short_id}... ({parents} parents, {v.payload_type.name})")
+
+
+if __name__ == "__main__":
+    cli()

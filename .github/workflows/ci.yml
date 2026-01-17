@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Lint & test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 and 3.12 evaluate annotations eagerly, guarding the storage
+        # import bugs that a 3.14-only dev environment masks.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package + dev tools
+        run: pip install -e ".[dev]"
+
+      - name: Ruff (lint) — hard gate
+        run: ruff check cfp/ tests/
+
+      - name: Mypy (types) — advisory (codebase is gradually typed)
+        run: mypy cfp/ || true
+
+      - name: Pytest — hard gate
+        run: pytest tests/ -q
+
+  zk-proof:
+    name: Real Groth16 proof (Poseidon bridge)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Install node deps (circomlib + snarkjs)
+        run: npm install
+
+      - name: Install circom (prebuilt binary)
+        run: |
+          curl -sSL -o /usr/local/bin/circom \
+            https://github.com/iden3/circom/releases/download/v2.1.9/circom-linux-amd64
+          chmod +x /usr/local/bin/circom
+          circom --version
+
+      - name: Run end-to-end ZK proof test — hard gate
+        # This compiles a circuit, runs a real Groth16 setup/prove/verify, and
+        # asserts the in-circuit Poseidon output equals the Python one. It must
+        # NOT skip here (fail if the toolchain is somehow unavailable).
+        run: pytest tests/integration/test_zk_proof.py -v -o addopts=""

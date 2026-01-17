@@ -1,0 +1,36 @@
+{
+  "name": "cfp",
+  "version": "0.1.0",
+  "description": "Convergent Flow Protocol - Node/circomlib dependencies for the ZK circuits (see circuits/). Protocol logic and tests live in the Python package.",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"CFP tests run via pytest: 'pytest tests/'. This package only vendors circomlib for the Circom circuits.\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mario-ciava/cfp.git"
+  },
+  "keywords": [
+    "blockchain",
+    "zk",
+    "circom",
+    "dag",
+    "intents",
+    "utxo"
+  ],
+  "author": "Mario Ciavarella",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mario-ciava/cfp/issues"
+  },
+  "homepage": "https://github.com/mario-ciava/cfp#readme",
+  "dependencies": {
+    "circomlib": "^2.0.5"
+  },
+  "devDependencies": {
+    "snarkjs": "^0.7.6"
+  }
+}
